@@ -53,7 +53,7 @@ class LagVpnService : VpnService() {
             try {
                 val pfd = buildTun()
                 val fd = pfd.detachFd()
-                val newEngine = NetstackEngine(this@LagVpnService) { lagEnabled }
+                val newEngine = NetstackEngine(this@LagVpnService, { lagEnabled }, { (getSharedPreferences(PREFS, MODE_PRIVATE).getInt(KEY_DELAY_MS, 1000)).toLong() })
                 try { newEngine.start(fd) }
                 catch (t: Throwable) {
                     runCatching { ParcelFileDescriptor.adoptFd(fd).close() }
@@ -62,7 +62,7 @@ class LagVpnService : VpnService() {
                 detachedTunFd.set(fd)
                 engine = newEngine
                 vpnActive = true
-                publishState(true, lagEnabled, if (lagEnabled) "VPN açık • gecikme AÇIK (1000 ms/yön)" else "VPN açık • gecikme KAPALI")
+                publishState(true, lagEnabled, if (lagEnabled) "VPN açık • gecikme AÇIK (gecikme ayarına göre)" else "VPN açık • gecikme KAPALI")
                 refreshNotification()
                 Log.i(TAG, "VPN started; delayEnabled=$lagEnabled")
             } catch (t: Throwable) {
@@ -75,7 +75,7 @@ class LagVpnService : VpnService() {
 
     private fun buildTun(): ParcelFileDescriptor {
         val builder = Builder()
-            .setSession("ANONH4X LagSwitch")
+            .setSession("AnonH4X Fake Lag")
             .setMtu(MTU)
             .addAddress(TUN_IPV4, 32)
             .addRoute("0.0.0.0", 0)
@@ -127,8 +127,8 @@ class LagVpnService : VpnService() {
         val manager = getSystemService(NotificationManager::class.java)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             manager.createNotificationChannel(
-                NotificationChannel(CHANNEL_ID, "LagSwitch VPN", NotificationManager.IMPORTANCE_LOW)
-                    .apply { description = "LagSwitch bağlantı durumu" },
+                NotificationChannel(CHANNEL_ID, "AnonH4X Fake Lag VPN", NotificationManager.IMPORTANCE_LOW)
+                    .apply { description = "AnonH4X Fake Lag bağlantı durumu" },
             )
         }
         val pending = PendingIntent.getActivity(
@@ -138,7 +138,7 @@ class LagVpnService : VpnService() {
         val notification = Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_upload_done)
             .setContentTitle("ANONH4X LagSwitch")
-            .setContentText(if (lagEnabled) "Oxide trafiği 1000 ms gecikmeli" else "VPN açık, gecikme kapalı")
+            .setContentText(if (lagEnabled) "Oxide trafiği gecikmeli" else "VPN açık, gecikme kapalı")
             .setContentIntent(pending)
             .setOngoing(true)
             .build()
@@ -191,6 +191,7 @@ class LagVpnService : VpnService() {
         const val KEY_VPN_ACTIVE = "vpn_active"
         const val KEY_DELAY_ENABLED = "delay_enabled"
         const val KEY_STATUS = "status_text"
+        const val KEY_DELAY_MS = "delay_ms"
         private const val TAG = "LagSwitch"
         private const val CHANNEL_ID = "lagswitch_vpn"
         private const val NOTIFICATION_ID = 7301
