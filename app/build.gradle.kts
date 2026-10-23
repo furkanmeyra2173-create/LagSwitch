@@ -7,6 +7,15 @@ android {
     namespace = "com.anonh4x.lagswitch"
     compileSdk = 35
 
+    // Keep Java and Kotlin bytecode targets aligned for CI.
+    compileOptions {
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
+    }
+    kotlinOptions {
+        jvmTarget = "17"
+    }
+
     defaultConfig {
         applicationId = "com.anonh4x.lagswitch"
         minSdk = 26
