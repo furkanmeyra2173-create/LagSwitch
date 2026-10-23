@@ -1,7 +1,6 @@
 package com.anonh4x.lagswitch
 
 import android.net.VpnService
-import android.os.ParcelFileDescriptor
 import android.util.Log
 import com.anonh4x.bridge.Bridge
 import com.anonh4x.bridge.Handler
@@ -56,12 +55,8 @@ internal class NetstackEngine(
                 }
             }
         }
-        try {
-            tunnel = Bridge.newTunnel(tunFd.toLong(), MTU.toLong(), "RELAY", handler)
-        } catch (t: Throwable) {
-            runCatching { ParcelFileDescriptor.adoptFd(tunFd).close() }
-            throw t
-        }
+        // LagVpnService owns and closes this FD if startup fails or when stopped.
+        tunnel = Bridge.newTunnel(tunFd.toLong(), MTU.toLong(), "RELAY", handler)
     }
 
     fun stop() {
