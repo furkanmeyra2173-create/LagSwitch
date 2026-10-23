@@ -42,6 +42,7 @@ class MainActivity : Activity() {
     private var lagEnabled = false
     private var testRunning = false
     private var statusMessage = "Tünel kapalı"
+    private var launchSelectedAfterVpn = false
     private var receiverRegistered = false
     private val requestVpn = 41
     private val requestOverlay = 42
@@ -63,6 +64,12 @@ class MainActivity : Activity() {
             statusMessage = intent.getStringExtra(LagVpnService.EXTRA_STATUS) ?: "Durum bilinmiyor"
             refresh()
             scheduleCycle()
+            if (vpnActive && launchSelectedAfterVpn) {
+                launchSelectedAfterVpn = false
+                launchSelectedApp()
+            } else if (!vpnActive && statusMessage.startsWith("HATA:")) {
+                launchSelectedAfterVpn = false
+            }
         }
     }
 
@@ -333,6 +340,9 @@ class MainActivity : Activity() {
             scheduleCycle()
             return
         }
+        // When the user starts the VPN, automatically open the chosen game/app
+        // only after the VPN service reports that its tunnel is ready.
+        launchSelectedAfterVpn = true
         statusMessage = "VPN tüneli başlatılıyor…"
         refresh()
         if (!Settings.canDrawOverlays(this)) {
@@ -398,10 +408,39 @@ class MainActivity : Activity() {
         super.onActivityResult(requestCode, resultCode, data)
         if (requestCode == requestOverlay) {
             if (Settings.canDrawOverlays(this)) beginVpnAuthorization()
-            else { statusMessage = "Ekran üstü izni verilmedi; yüzen düğme görünemez"; refresh() }
+            else {
+                launchSelectedAfterVpn = false
+                statusMessage = "Ekran üstü izni verilmedi; yüzen düğme görünemez"
+                refresh()
+            }
         } else if (requestCode == requestVpn) {
             if (resultCode == RESULT_OK) startLagVpnService()
-            else { statusMessage = "VPN izni verilmedi"; refresh() }
+            else {
+                launchSelectedAfterVpn = false
+                statusMessage = "VPN izni verilmedi"
+                refresh()
+            }
+        }
+    }
+
+    private fun launchSelectedApp() {
+        // Prefer Oxide when it is selected; otherwise launch the first selected app.
+        val targetPackage = selectedApps.firstOrNull { it == OXIDE_PACKAGE }
+            ?: selectedApps.sorted().firstOrNull()
+        if (targetPackage == null) {
+            android.widget.Toast.makeText(this, "Önce açılacak oyunu seç.", android.widget.Toast.LENGTH_LONG).show()
+            return
+        }
+        val launchIntent = packageManager.getLaunchIntentForPackage(targetPackage)
+        if (launchIntent == null) {
+            android.widget.Toast.makeText(this, "Seçilen uygulama açılamadı. Kurulu olduğunu kontrol et.", android.widget.Toast.LENGTH_LONG).show()
+            return
+        }
+        runCatching {
+            launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            startActivity(launchIntent)
+        }.onFailure {
+            android.widget.Toast.makeText(this, "Oyun otomatik açılamadı: ${it.message ?: "bilinmeyen hata"}", android.widget.Toast.LENGTH_LONG).show()
         }
     }
 
