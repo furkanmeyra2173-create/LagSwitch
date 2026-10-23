@@ -7,6 +7,8 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.Color
 import android.net.VpnService
+import android.net.Uri
+import android.provider.Settings
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -39,6 +41,7 @@ class MainActivity : Activity() {
     private var statusMessage = "Tünel kapalı"
     private var receiverRegistered = false
     private val requestVpn = 41
+    private val requestOverlay = 42
     private val uiHandler = Handler(Looper.getMainLooper())
     private val prefs by lazy { getSharedPreferences(LagVpnService.PREFS, MODE_PRIVATE) }
     private val cycleAction = Runnable {
@@ -255,6 +258,17 @@ class MainActivity : Activity() {
         }
         statusMessage = "VPN tüneli başlatılıyor…"
         refresh()
+        if (!Settings.canDrawOverlays(this)) {
+            statusMessage = "Yüzen düğme için ekran üstü izni gerekli"
+            refresh()
+            val overlayIntent = Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName"))
+            startActivityForResult(overlayIntent, requestOverlay)
+            return
+        }
+        beginVpnAuthorization()
+    }
+
+    private fun beginVpnAuthorization() {
         val prepare = VpnService.prepare(this)
         if (prepare != null) startActivityForResult(prepare, requestVpn) else startLagVpnService()
     }
@@ -305,7 +319,10 @@ class MainActivity : Activity() {
     @Deprecated("Deprecated API retained for broad device compatibility")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
-        if (requestCode == requestVpn) {
+        if (requestCode == requestOverlay) {
+            if (Settings.canDrawOverlays(this)) beginVpnAuthorization()
+            else { statusMessage = "Ekran üstü izni verilmedi; yüzen düğme görünemez"; refresh() }
+        } else if (requestCode == requestVpn) {
             if (resultCode == RESULT_OK) startLagVpnService()
             else { statusMessage = "VPN izni verilmedi"; refresh() }
         }
