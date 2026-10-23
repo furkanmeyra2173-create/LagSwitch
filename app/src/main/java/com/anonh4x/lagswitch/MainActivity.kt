@@ -5,6 +5,7 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.content.pm.PackageManager
 import android.graphics.Color
 import android.net.VpnService
 import android.net.Uri
@@ -35,6 +36,8 @@ class MainActivity : Activity() {
     private lateinit var onTimeLabel: TextView
     private lateinit var offTimeLabel: TextView
     private lateinit var autoCycle: CheckBox
+    private lateinit var appSelectionStatus: TextView
+    private val selectedApps = mutableSetOf<String>()
     private var vpnActive = false
     private var lagEnabled = false
     private var testRunning = false
@@ -75,6 +78,7 @@ class MainActivity : Activity() {
             registerReceiver(stateReceiver, filter)
         }
         receiverRegistered = true
+        loadSelectedApps()
         buildUi()
         refresh()
     }
@@ -214,6 +218,54 @@ class MainActivity : Activity() {
         root.addView(offTimeLabel, ViewGroup.LayoutParams(-1, -2))
         root.addView(offSeek, ViewGroup.LayoutParams(-1, -2))
         root.addView(info, ViewGroup.LayoutParams(-1, -2))
+
+        val appTitle = TextView(this).apply {
+            text = "OYUN / UYGULAMA SEÇİMİ"
+            textSize = 16f
+            setTypeface(null, android.graphics.Typeface.BOLD)
+            setTextColor(Color.rgb(0, 235, 170))
+            setPadding(0, dp(22), 0, dp(5))
+        }
+        val appDescription = TextView(this).apply {
+            text = "İşaretlediğin uygulamaların trafiği gecikme tünelinden geçer. Seçimi değiştirdikten sonra aşağıdaki düğmeye bas."
+            textSize = 12f
+            setTextColor(Color.rgb(150, 161, 178))
+            setPadding(0, 0, 0, dp(8))
+        }
+        appSelectionStatus = label("Seçili uygulama: " + selectedApps.size)
+        root.addView(appTitle, ViewGroup.LayoutParams(-1, -2))
+        root.addView(appDescription, ViewGroup.LayoutParams(-1, -2))
+        root.addView(appSelectionStatus, ViewGroup.LayoutParams(-1, -2))
+        val launcherIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+        val launchableApps = packageManager.queryIntentActivities(launcherIntent, 0)
+            .mapNotNull { it.activityInfo?.applicationInfo }
+            .filter { it.packageName != packageName }
+            .distinctBy { it.packageName }
+            .sortedBy { it.loadLabel(packageManager).toString().lowercase() }
+        if (launchableApps.isEmpty()) {
+            root.addView(label("Gösterilecek uygulama bulunamadı."), ViewGroup.LayoutParams(-1, -2))
+        } else {
+            launchableApps.forEach { app ->
+                val check = CheckBox(this).apply {
+                    text = app.loadLabel(packageManager).toString()
+                    textSize = 14f
+                    setTextColor(Color.WHITE)
+                    isChecked = selectedApps.contains(app.packageName)
+                    buttonTintList = android.content.res.ColorStateList.valueOf(Color.rgb(0, 235, 170))
+                    setOnCheckedChangeListener { _, checked ->
+                        if (checked) selectedApps.add(app.packageName) else selectedApps.remove(app.packageName)
+                        prefs.edit().putStringSet(KEY_SELECTED_APPS, selectedApps.toSet()).apply()
+                        appSelectionStatus.text = "Seçili uygulama: " + selectedApps.size
+                    }
+                }
+                root.addView(check, ViewGroup.LayoutParams(-1, -2))
+            }
+        }
+        val applyApps = Button(this).apply {
+            text = "SEÇİLEN UYGULAMALARI UYGULA"
+            setOnClickListener { applySelectedApps() }
+        }
+        root.addView(applyApps, ViewGroup.LayoutParams(-1, -2))
         val scroll = android.widget.ScrollView(this).apply {
             isFillViewport = true
             addView(root)
@@ -232,6 +284,30 @@ class MainActivity : Activity() {
         override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) { onChange(progress) }
         override fun onStartTrackingTouch(seekBar: SeekBar?) {}
         override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+    }
+
+    private fun loadSelectedApps() {
+        val saved = prefs.getStringSet(KEY_SELECTED_APPS, null)
+        if (saved != null) {
+            selectedApps.clear()
+            selectedApps.addAll(saved)
+        } else {
+            val oxideInstalled = runCatching { packageManager.getApplicationInfo(OXIDE_PACKAGE, 0) }.isSuccess
+            if (oxideInstalled) selectedApps.add(OXIDE_PACKAGE)
+        }
+    }
+
+    private fun applySelectedApps() {
+        prefs.edit().putStringSet(KEY_SELECTED_APPS, selectedApps.toSet()).apply()
+        if (vpnActive) {
+            statusMessage = "Uygulama listesi uygulanıyor; VPN yeniden bağlanıyor…"
+            refresh()
+            startService(Intent(this, LagVpnService::class.java).setAction(LagVpnService.ACTION_RESTART))
+        } else {
+            statusMessage = "Seçim kaydedildi. VPN'i başlatınca uygulanacak."
+            refresh()
+            android.widget.Toast.makeText(this, statusMessage, android.widget.Toast.LENGTH_LONG).show()
+        }
     }
 
     private fun applyToggleSize(size: Int) {
@@ -349,5 +425,7 @@ class MainActivity : Activity() {
         private const val KEY_AUTO_CYCLE = "auto_cycle"
         private const val KEY_ON_SECONDS = "on_seconds"
         private const val KEY_OFF_SECONDS = "off_seconds"
+        private const val KEY_SELECTED_APPS = "selected_apps"
+        private const val OXIDE_PACKAGE = "com.catsbit.oxidesurvivalisland"
     }
 }
