@@ -46,6 +46,7 @@ class LagVpnService : VpnService() {
         when (intent?.action) {
             ACTION_STOP -> requestStop("VPN tüneli kapatıldı")
             ACTION_RESTART -> requestRestart()
+            ACTION_RESIZE_OVERLAY -> serviceScope.launch { withContext(Dispatchers.Main) { hideFloatingButton(); showFloatingButton() } }
             ACTION_SET_DELAY -> setDelay(intent.getBooleanExtra(EXTRA_DELAY_ENABLED, false))
             ACTION_START, null -> {
                 if (engine == null) {
@@ -281,7 +282,7 @@ class LagVpnService : VpnService() {
         val notification = Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_upload_done)
             .setContentTitle("ANONH4X LagSwitch")
-            .setContentText(if (lagEnabled) "Oxide trafiği 1000 ms gecikmeli" else "VPN açık, gecikme kapalı")
+            .setContentText(if (lagEnabled) "Seçili uygulamalar: " + getSharedPreferences(PREFS, MODE_PRIVATE).getInt(KEY_DELAY_MS, 1000) + " ms gecikme" else "VPN açık, gecikme kapalı")
             .setOngoing(true).build()
         getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification)
     }
@@ -315,6 +316,7 @@ class LagVpnService : VpnService() {
         const val ACTION_STOP = "com.anonh4x.lagswitch.STOP"
         const val ACTION_SET_DELAY = "com.anonh4x.lagswitch.SET_DELAY"
         const val ACTION_RESTART = "com.anonh4x.lagswitch.RESTART"
+        const val ACTION_RESIZE_OVERLAY = "com.anonh4x.lagswitch.RESIZE_OVERLAY"
         const val ACTION_STATE = "com.anonh4x.lagswitch.STATE"
         const val EXTRA_DELAY_ENABLED = "delay_enabled"
         const val EXTRA_VPN_ACTIVE = "vpn_active"
