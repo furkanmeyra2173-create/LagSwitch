@@ -25,6 +25,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.io.IOException
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -44,6 +45,7 @@ class LagVpnService : VpnService() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> requestStop("VPN tüneli kapatıldı")
+            ACTION_RESTART -> requestRestart()
             ACTION_SET_DELAY -> setDelay(intent.getBooleanExtra(EXTRA_DELAY_ENABLED, false))
             ACTION_START, null -> {
                 if (engine == null) {
@@ -74,7 +76,7 @@ class LagVpnService : VpnService() {
                 detachedTunFd.set(fd)
                 engine = newEngine
                 vpnActive = true
-                showFloatingButton()
+                withContext(Dispatchers.Main) { showFloatingButton() }
                 publishState(true, lagEnabled, if (lagEnabled) "VPN açık • gecikme AÇIK (gecikme ayarına göre)" else "VPN açık • gecikme KAPALI")
                 refreshNotification()
                 Log.i(TAG, "VPN started; delayEnabled=$lagEnabled")
@@ -96,11 +98,16 @@ class LagVpnService : VpnService() {
             .addRoute("::", 0)
             .addDnsServer(DNS_V4)
             .addDnsServer(DNS_V6)
-        try {
-            builder.addAllowedApplication(OXIDE_PACKAGE)
-            builder.addAllowedApplication(packageName)
-        } catch (e: PackageManager.NameNotFoundException) {
-            throw IllegalStateException("Oxide: Survival Island kurulu görünmüyor. Oyunu yükleyip tekrar dene.", e)
+        val selectedPackages = getSharedPreferences(PREFS, MODE_PRIVATE)
+            .getStringSet(KEY_SELECTED_APPS, setOf(OXIDE_PACKAGE))
+            ?.toSet()
+            .orEmpty()
+        (selectedPackages + packageName).forEach { selectedPackage ->
+            try {
+                builder.addAllowedApplication(selectedPackage)
+            } catch (e: PackageManager.NameNotFoundException) {
+                Log.w(TAG, "Selected app is no longer installed: " + selectedPackage, e)
+            }
         }
         builder.setBlocking(true)
         return builder.establish() ?: throw IOException("Android VPN tünelini kuramadı veya izin geri alındı.")
@@ -125,22 +132,27 @@ class LagVpnService : VpnService() {
         windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
         val sizeDp = getSharedPreferences(PREFS, MODE_PRIVATE).getInt("button_size_dp", 64).coerceIn(48, 104)
         val sizePx = (sizeDp * resources.displayMetrics.density).toInt()
+        val widthPx = (sizePx * 1.45f).toInt()
         val button = TextView(this).apply {
-            text = if (lagEnabled) "ANON\nLAG ON" else "ANON\nLAG OFF"
-            textSize = 11f
+            text = if (lagEnabled) "FAKE LAG\nON" else "FAKE LAG\nOFF"
+            textSize = 12f
             typeface = Typeface.DEFAULT_BOLD
             gravity = Gravity.CENTER
             setTextColor(Color.WHITE)
+            setPadding((8 * resources.displayMetrics.density).toInt(), 0, (8 * resources.displayMetrics.density).toInt(), 0)
             background = GradientDrawable().apply {
-                shape = GradientDrawable.OVAL
+                shape = GradientDrawable.RECTANGLE
+                cornerRadius = sizePx / 2f
                 setColor(if (lagEnabled) Color.rgb(180, 58, 66) else Color.rgb(0, 150, 110))
                 setStroke((2 * resources.displayMetrics.density).toInt(), Color.rgb(0, 235, 170))
             }
-            elevation = 8 * resources.displayMetrics.density
+            elevation = 10 * resources.displayMetrics.density
             contentDescription = "AnonH4X Fake Lag aç veya kapat"
+            isClickable = true
+            setOnClickListener { if (vpnActive) setDelay(!lagEnabled) }
         }
         val params = WindowManager.LayoutParams(
-            sizePx, sizePx,
+            widthPx, sizePx,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
             WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
             PixelFormat.TRANSLUCENT
@@ -176,7 +188,7 @@ class LagVpnService : VpnService() {
                     true
                 }
                 MotionEvent.ACTION_UP -> {
-                    if (!dragged && vpnActive) setDelay(!lagEnabled)
+                    if (!dragged) view.performClick()
                     true
                 }
                 else -> true
@@ -193,7 +205,7 @@ class LagVpnService : VpnService() {
 
     private fun updateFloatingButton() {
         val button = floatingButton ?: return
-        button.text = if (lagEnabled) "ANON\nLAG ON" else "ANON\nLAG OFF"
+        button.text = if (lagEnabled) "FAKE LAG\nON" else "FAKE LAG\nOFF"
         (button.background as? GradientDrawable)?.setColor(
             if (lagEnabled) Color.rgb(180, 58, 66) else Color.rgb(0, 150, 110)
         )
@@ -208,11 +220,27 @@ class LagVpnService : VpnService() {
     }
 
     private fun requestStop(message: String) { serviceScope.launch { stopTunnel(message) } }
+    private fun requestRestart() {
+        serviceScope.launch {
+            val previousLagState = lagEnabled
+            withContext(Dispatchers.Main) { hideFloatingButton() }
+            val oldEngine = engine
+            engine = null
+            vpnActive = false
+            runCatching { oldEngine?.stop() }
+            val oldFd = detachedTunFd.getAndSet(-1)
+            if (oldFd >= 0) runCatching { ParcelFileDescriptor.adoptFd(oldFd).close() }
+            lagEnabled = previousLagState
+            publishState(false, false, "Seçilen uygulamalarla VPN yeniden kuruluyor…")
+            starting = false
+            beginStart()
+        }
+    }
     private suspend fun failAndStop(message: String) = stopTunnel(message)
     private fun stopTunnelAsync(message: String) { serviceScope.launch { stopTunnel(message) } }
 
     private suspend fun stopTunnel(message: String) {
-        hideFloatingButton()
+        withContext(Dispatchers.Main) { hideFloatingButton() }
         val oldEngine = engine
         engine = null
         vpnActive = false
@@ -286,6 +314,7 @@ class LagVpnService : VpnService() {
         const val ACTION_START = "com.anonh4x.lagswitch.START"
         const val ACTION_STOP = "com.anonh4x.lagswitch.STOP"
         const val ACTION_SET_DELAY = "com.anonh4x.lagswitch.SET_DELAY"
+        const val ACTION_RESTART = "com.anonh4x.lagswitch.RESTART"
         const val ACTION_STATE = "com.anonh4x.lagswitch.STATE"
         const val EXTRA_DELAY_ENABLED = "delay_enabled"
         const val EXTRA_VPN_ACTIVE = "vpn_active"
@@ -295,6 +324,7 @@ class LagVpnService : VpnService() {
         const val KEY_DELAY_ENABLED = "delay_enabled"
         const val KEY_STATUS = "status_text"
         const val KEY_DELAY_MS = "delay_ms"
+        private const val KEY_SELECTED_APPS = "selected_apps"
         private const val TAG = "LagSwitch"
         private const val CHANNEL_ID = "lagswitch_vpn"
         private const val NOTIFICATION_ID = 7301
