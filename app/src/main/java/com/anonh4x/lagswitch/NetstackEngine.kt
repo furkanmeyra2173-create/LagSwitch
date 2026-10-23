@@ -29,6 +29,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 internal class NetstackEngine(
     private val vpnService: VpnService,
     private val delayEnabled: () -> Boolean,
+    private val configuredDelayMs: () -> Long,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val stopped = AtomicBoolean(false)
@@ -176,7 +177,7 @@ internal class NetstackEngine(
         read: (ByteArray) -> Int, write: (ByteArray) -> Unit,
         delayTraffic: Boolean, abortFlow: () -> Unit,
     ) = coroutineScope {
-        val queue = DelayQueue<ByteArray>(TCP_QUEUE_ITEMS, { if (delayTraffic && delayEnabled()) DELAY_MS else 0L })
+        val queue = DelayQueue<ByteArray>(TCP_QUEUE_ITEMS, { if (delayTraffic && delayEnabled()) configuredDelayMs().coerceIn(0L, 3000L) else 0L })
         val producer = launch(Dispatchers.IO) {
             val buffer = ByteArray(TCP_CHUNK_SIZE)
             try {
@@ -231,7 +232,6 @@ internal class NetstackEngine(
     companion object {
         private const val TAG = "LagSwitchNetstack"
         private const val MTU = 1500
-        private const val DELAY_MS = 1000L
         private const val CONNECT_TIMEOUT_MS = 10_000
         private const val TCP_CHUNK_SIZE = 8 * 1024
         private const val TCP_QUEUE_ITEMS = 16
