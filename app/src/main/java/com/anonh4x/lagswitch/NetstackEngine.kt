@@ -182,7 +182,7 @@ internal class NetstackEngine(
         read: (ByteArray) -> Int, write: (ByteArray) -> Unit,
         delayTraffic: Boolean, abortFlow: () -> Unit,
     ) = coroutineScope {
-        val queue = DelayQueue<ByteArray>(TCP_QUEUE_ITEMS) { if (delayTraffic && delayEnabled()) DELAY_MS else 0L }
+        val queue = DelayQueue<ByteArray>(TCP_QUEUE_ITEMS, { if (delayTraffic && delayEnabled()) DELAY_MS else 0L })
         val producer = launch(Dispatchers.IO) {
             val buffer = ByteArray(TCP_CHUNK_SIZE)
             try {
@@ -211,7 +211,7 @@ internal class NetstackEngine(
         read: () -> ByteArray?, write: (ByteArray) -> Unit,
         delayTraffic: Boolean, abortFlow: () -> Unit,
     ) = coroutineScope {
-        val queue = DelayQueue<ByteArray>(UDP_QUEUE_ITEMS) { if (delayTraffic && delayEnabled()) DELAY_MS else 0L }
+        val queue = DelayQueue<ByteArray>(UDP_QUEUE_ITEMS, { if (delayTraffic && delayEnabled()) DELAY_MS else 0L })
         val producer = launch(Dispatchers.IO) {
             try {
                 while (isActive) {
