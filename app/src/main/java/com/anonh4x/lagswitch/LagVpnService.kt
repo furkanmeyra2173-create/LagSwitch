@@ -50,7 +50,9 @@ class LagVpnService : VpnService() {
             ACTION_SET_DELAY -> setDelay(intent.getBooleanExtra(EXTRA_DELAY_ENABLED, false))
             ACTION_START, null -> {
                 if (engine == null) {
-                    lagEnabled = true
+                    // Start with lag disabled so the game can finish loading its network
+                    // session before the user deliberately enables packet delay.
+                    lagEnabled = false
                     enterForeground()
                     beginStart()
                 } else setDelay(true)
@@ -121,7 +123,8 @@ class LagVpnService : VpnService() {
             return
         }
         lagEnabled = enabled
-        val message = if (enabled) "VPN açık • gecikme AÇIK (1000 ms/yön)" else "VPN açık • gecikme KAPALI"
+        val configuredDelay = getSharedPreferences(PREFS, MODE_PRIVATE).getInt(KEY_DELAY_MS, 1000).coerceIn(0, 3000)
+        val message = if (enabled) "VPN açık • gecikme AÇIK (" + configuredDelay + " ms/yön)" else "VPN açık • gecikme KAPALI"
         publishState(true, enabled, message)
         updateFloatingButton()
         refreshNotification()
