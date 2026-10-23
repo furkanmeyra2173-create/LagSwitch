@@ -313,6 +313,7 @@ class MainActivity : Activity() {
     private fun applyToggleSize(size: Int) {
         toggle.layoutParams = toggle.layoutParams?.apply { height = dp(size) }
         toggle.requestLayout()
+        if (vpnActive) startService(Intent(this, LagVpnService::class.java).setAction(LagVpnService.ACTION_RESIZE_OVERLAY))
     }
 
     private fun scheduleCycle() {
