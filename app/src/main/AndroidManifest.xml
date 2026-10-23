@@ -4,6 +4,7 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SYSTEM_EXEMPTED" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <queries><package android:name="com.catsbit.oxidesurvivalisland" /></queries>
     <application android:allowBackup="false" android:label="AnonH4X Fake Lag"
         android:theme="@android:style/Theme.Material.NoActionBar" android:usesCleartextTraffic="false">
