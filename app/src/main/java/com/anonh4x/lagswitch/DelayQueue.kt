@@ -3,7 +3,7 @@ package com.anonh4x.lagswitch
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 
-/** Bounded FIFO. Deadlines are assigned only after a send enters the channel. */
+/** Bounded FIFO. Each deadline is measured when data arrives, before queue backpressure. */
 internal class DelayQueue<T>(
     capacity: Int,
     private val delayMillis: () -> Long,
