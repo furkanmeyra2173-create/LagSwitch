@@ -171,9 +171,8 @@ class LagVpnService : VpnService() {
         val old = engine
         engine = null
         runCatching { old?.stop() }
-        val oldFd = detachedTunFd
-        detachedTunFd = null
-        if (oldFd != null) runCatching { ParcelFileDescriptor.adoptFd(oldFd).close() }
+        val oldFd = detachedTunFd.getAndSet(-1)
+        if (oldFd >= 0) runCatching { ParcelFileDescriptor.adoptFd(oldFd).close() }
         vpnActive = false
         lagEnabled = false
         serviceScope.cancel()
