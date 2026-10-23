@@ -28,6 +28,9 @@ class LagVpnService : VpnService() {
         private set
     @Volatile private var starting = false
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private var windowManager: WindowManager? = null
+    private var floatingButton: TextView? = null
+    private var floatingParams: WindowManager.LayoutParams? = null
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
@@ -62,6 +65,7 @@ class LagVpnService : VpnService() {
                 detachedTunFd.set(fd)
                 engine = newEngine
                 vpnActive = true
+                showFloatingButton()
                 publishState(true, lagEnabled, if (lagEnabled) "VPN açık • gecikme AÇIK (gecikme ayarına göre)" else "VPN açık • gecikme KAPALI")
                 refreshNotification()
                 Log.i(TAG, "VPN started; delayEnabled=$lagEnabled")
@@ -102,8 +106,96 @@ class LagVpnService : VpnService() {
         lagEnabled = enabled
         val message = if (enabled) "VPN açık • gecikme AÇIK (1000 ms/yön)" else "VPN açık • gecikme KAPALI"
         publishState(true, enabled, message)
+        updateFloatingButton()
         refreshNotification()
         Log.i(TAG, "delayEnabled=$enabled")
+    }
+
+    private fun showFloatingButton() {
+        if (!android.provider.Settings.canDrawOverlays(this) || floatingButton != null) return
+        windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
+        val sizeDp = getSharedPreferences(PREFS, MODE_PRIVATE).getInt("button_size_dp", 64).coerceIn(48, 104)
+        val sizePx = (sizeDp * resources.displayMetrics.density).toInt()
+        val button = TextView(this).apply {
+            text = if (lagEnabled) "ANON\nLAG ON" else "ANON\nLAG OFF"
+            textSize = 11f
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            setTextColor(Color.WHITE)
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(if (lagEnabled) Color.rgb(180, 58, 66) else Color.rgb(0, 150, 110))
+                setStroke((2 * resources.displayMetrics.density).toInt(), Color.rgb(0, 235, 170))
+            }
+            elevation = 8 * resources.displayMetrics.density
+            contentDescription = "AnonH4X Fake Lag aç veya kapat"
+        }
+        val params = WindowManager.LayoutParams(
+            sizePx, sizePx,
+            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+            PixelFormat.TRANSLUCENT
+        ).apply {
+            gravity = Gravity.TOP or Gravity.START
+            x = (16 * resources.displayMetrics.density).toInt()
+            y = (220 * resources.displayMetrics.density).toInt()
+        }
+        var downX = 0f
+        var downY = 0f
+        var startX = 0
+        var startY = 0
+        var dragged = false
+        button.setOnTouchListener { view, event ->
+            when (event.action) {
+                MotionEvent.ACTION_DOWN -> {
+                    downX = event.rawX
+                    downY = event.rawY
+                    startX = params.x
+                    startY = params.y
+                    dragged = false
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    val dx = (event.rawX - downX).toInt()
+                    val dy = (event.rawY - downY).toInt()
+                    if (kotlin.math.abs(dx) > 6 || kotlin.math.abs(dy) > 6) dragged = true
+                    if (dragged) {
+                        params.x = startX + dx
+                        params.y = startY + dy
+                        runCatching { windowManager?.updateViewLayout(view, params) }
+                    }
+                    true
+                }
+                MotionEvent.ACTION_UP -> {
+                    if (!dragged && vpnActive) setDelay(!lagEnabled)
+                    true
+                }
+                else -> true
+            }
+        }
+        try {
+            windowManager?.addView(button, params)
+            floatingButton = button
+            floatingParams = params
+        } catch (t: Throwable) {
+            Log.w(TAG, "Could not show floating button", t)
+        }
+    }
+
+    private fun updateFloatingButton() {
+        val button = floatingButton ?: return
+        button.text = if (lagEnabled) "ANON\nLAG ON" else "ANON\nLAG OFF"
+        (button.background as? GradientDrawable)?.setColor(
+            if (lagEnabled) Color.rgb(180, 58, 66) else Color.rgb(0, 150, 110)
+        )
+    }
+
+    private fun hideFloatingButton() {
+        val button = floatingButton
+        if (button != null) runCatching { windowManager?.removeView(button) }
+        floatingButton = null
+        floatingParams = null
+        windowManager = null
     }
 
     private fun requestStop(message: String) { serviceScope.launch { stopTunnel(message) } }
@@ -111,6 +203,7 @@ class LagVpnService : VpnService() {
     private fun stopTunnelAsync(message: String) { serviceScope.launch { stopTunnel(message) } }
 
     private suspend fun stopTunnel(message: String) {
+        hideFloatingButton()
         val oldEngine = engine
         engine = null
         vpnActive = false
@@ -168,6 +261,7 @@ class LagVpnService : VpnService() {
         stopTunnelAsync("VPN izni geri alındı")
     }
     override fun onDestroy() {
+        hideFloatingButton()
         val old = engine
         engine = null
         runCatching { old?.stop() }
