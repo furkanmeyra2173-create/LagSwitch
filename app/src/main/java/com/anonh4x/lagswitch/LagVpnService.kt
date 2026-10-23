@@ -21,7 +21,7 @@ import java.io.IOException
 /** Owns the TUN and routes only Oxide and the in-app connectivity test through it. */
 class LagVpnService : VpnService() {
     @Volatile private var engine: NetstackEngine? = null
-    @Volatile private var tunInterface: ParcelFileDescriptor? = null
+    @Volatile private var detachedTunFd: Int? = null
     @Volatile private var vpnActive = false
     @Volatile internal var lagEnabled = false
         private set
@@ -56,10 +56,9 @@ class LagVpnService : VpnService() {
                 try { newEngine.start(fd) }
                 catch (t: Throwable) {
                     runCatching { ParcelFileDescriptor.adoptFd(fd).close() }
-                    pfd.close()
                     throw t
                 }
-                tunInterface = pfd
+                detachedTunFd = fd
                 engine = newEngine
                 vpnActive = true
                 publishState(true, lagEnabled, if (lagEnabled) "VPN açık • gecikme AÇIK (1000 ms/yön)" else "VPN açık • gecikme KAPALI")
@@ -116,8 +115,9 @@ class LagVpnService : VpnService() {
         vpnActive = false
         lagEnabled = false
         runCatching { oldEngine?.stop() }
-        runCatching { tunInterface?.close() }
-        tunInterface = null
+        val oldFd = detachedTunFd
+        detachedTunFd = null
+        if (oldFd != null) runCatching { ParcelFileDescriptor.adoptFd(oldFd).close() }
         publishState(false, false, message)
         runCatching { stopForeground(STOP_FOREGROUND_REMOVE) }
         stopSelf()
@@ -171,8 +171,9 @@ class LagVpnService : VpnService() {
         val old = engine
         engine = null
         runCatching { old?.stop() }
-        runCatching { tunInterface?.close() }
-        tunInterface = null
+        val oldFd = detachedTunFd
+        detachedTunFd = null
+        if (oldFd != null) runCatching { ParcelFileDescriptor.adoptFd(oldFd).close() }
         vpnActive = false
         lagEnabled = false
         serviceScope.cancel()

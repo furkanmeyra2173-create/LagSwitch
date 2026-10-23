@@ -141,7 +141,6 @@ internal class NetstackEngine(
         }
         try {
             if (!vpnService.protect(socket)) throw IOException("VpnService.protect(DatagramSocket) failed")
-            socket.soTimeout = UDP_IDLE_TIMEOUT_MS
             socket.connect(InetSocketAddress(InetAddress.getByName(dstIp), dstPort))
             val bypassDelay = dstPort == 53 || dstPort == 853
             coroutineScope {
@@ -239,7 +238,6 @@ internal class NetstackEngine(
         private const val MTU = 1500
         private const val DELAY_MS = 1000L
         private const val CONNECT_TIMEOUT_MS = 10_000
-        private const val UDP_IDLE_TIMEOUT_MS = 60_000
         private const val TCP_CHUNK_SIZE = 8 * 1024
         private const val TCP_QUEUE_ITEMS = 16
         private const val UDP_QUEUE_ITEMS = 8

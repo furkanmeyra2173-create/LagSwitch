@@ -1,6 +1,5 @@
 package com.anonh4x.lagswitch
 
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 
@@ -10,20 +9,21 @@ internal class DelayQueue<T>(
     private val delayMillis: () -> Long,
     private val clockMillis: () -> Long = { System.nanoTime() / 1_000_000L },
 ) {
-    private data class Entry<T>(val value: T, val deadline: CompletableDeferred<Long>)
+    private data class Entry<T>(val value: T, val releaseAtMillis: Long)
     private val channel = Channel<Entry<T>>(capacity)
     init { require(capacity > 0) }
 
     suspend fun offer(value: T) {
-        val entry = Entry(value, CompletableDeferred())
+        // Timestamp arrival before send can suspend because the bounded queue is full.
+        // This maintains a fixed delay instead of adding another second under load.
+        val entry = Entry(value, clockMillis() + delayMillis().coerceAtLeast(0L))
         channel.send(entry)
-        entry.deadline.complete(clockMillis() + delayMillis().coerceAtLeast(0L))
     }
 
     /** Returns null after close and after accepted entries are drained. */
     suspend fun take(): T? {
         val entry = channel.receiveCatching().getOrNull() ?: return null
-        val remaining = entry.deadline.await() - clockMillis()
+        val remaining = entry.releaseAtMillis - clockMillis()
         if (remaining > 0L) delay(remaining)
         return entry.value
     }

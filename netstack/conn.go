@@ -2,7 +2,6 @@
 package bridge
 import (
 	"net"
-	"time"
 	"github.com/sagernet/gvisor/pkg/tcpip/adapters/gonet"
 )
 type tcpConn struct { Conn *gonet.TCPConn }
@@ -12,7 +11,6 @@ func (c *tcpConn) Close() error { return c.Conn.Close() }
 type udpConn struct { conn *gonet.UDPConn }
 func (c *udpConn) Receive() ([]byte, error) {
 	buf := make([]byte, 65*1024)
-	_ = c.conn.SetReadDeadline(time.Now().Add(60*time.Second))
 	n, err := c.conn.Read(buf)
 	if err != nil { return nil, err }
 	return buf[:n], nil
