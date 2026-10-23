@@ -133,7 +133,7 @@ class MainActivity : Activity() {
             setTextColor(Color.rgb(0, 235, 170))
             setPadding(0, dp(20), 0, dp(5))
         }
-        delayLabel = label("Paket gecikmesi: 1000 ms")
+        delayLabel = label("Paket gecikmesi: ${prefs.getInt(LagVpnService.KEY_DELAY_MS, 1000)} ms")
         val delaySeek = SeekBar(this).apply {
             max = 3000
             progress = prefs.getInt(LagVpnService.KEY_DELAY_MS, 1000).coerceIn(0, 3000)
@@ -142,7 +142,7 @@ class MainActivity : Activity() {
                 delayLabel.text = "Paket gecikmesi: $value ms"
             })
         }
-        sizeLabel = label("Aç/Kapat düğmesi: 64 dp")
+        sizeLabel = label("Aç/Kapat düğmesi: ${prefs.getInt(KEY_BUTTON_SIZE, 64)} dp")
         val sizeSeek = SeekBar(this).apply {
             max = 56
             progress = (prefs.getInt(KEY_BUTTON_SIZE, 64) - 48).coerceIn(0, 56)
@@ -164,7 +164,7 @@ class MainActivity : Activity() {
                 scheduleCycle()
             }
         }
-        onTimeLabel = label("Gecikme AÇIK süresi: 5 sn")
+        onTimeLabel = label("Gecikme AÇIK süresi: ${prefs.getInt(KEY_ON_SECONDS, 5)} sn")
         val onSeek = SeekBar(this).apply {
             max = 29
             progress = prefs.getInt(KEY_ON_SECONDS, 5).coerceIn(1, 30) - 1
@@ -175,7 +175,7 @@ class MainActivity : Activity() {
                 scheduleCycle()
             })
         }
-        offTimeLabel = label("Gecikme KAPALI süresi: 5 sn")
+        offTimeLabel = label("Gecikme KAPALI süresi: ${prefs.getInt(KEY_OFF_SECONDS, 5)} sn")
         val offSeek = SeekBar(this).apply {
             max = 29
             progress = prefs.getInt(KEY_OFF_SECONDS, 5).coerceIn(1, 30) - 1
