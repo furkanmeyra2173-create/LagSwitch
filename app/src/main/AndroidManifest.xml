@@ -2,7 +2,7 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SYSTEM_EXEMPTED" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <queries>
@@ -21,7 +21,9 @@
             </intent-filter>
         </activity>
         <service android:name=".LagVpnService" android:permission="android.permission.BIND_VPN_SERVICE"
-            android:foregroundServiceType="systemExempted" android:exported="false">
+            android:foregroundServiceType="specialUse" android:exported="false">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="VPN-based network delay control initiated by the user" />
             <intent-filter><action android:name="android.net.VpnService" /></intent-filter>
         </service>
     </application>
