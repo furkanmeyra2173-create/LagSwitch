@@ -4,7 +4,7 @@ HERE="$(cd "$(dirname "$0")" && pwd)"
 ROOT="$(cd "$HERE/.." && pwd)"
 OUT_DIR="$ROOT/app/libs"
 OUT_AAR="$OUT_DIR/netstack.aar"
-if [[ -z "$GOTOOLCHAIN" ]]; then export GOTOOLCHAIN=auto; fi
+export GOTOOLCHAIN=auto
 if [[ -z "$ANDROID_NDK_HOME" ]]; then echo "Set ANDROID_NDK_HOME to an Android NDK"; exit 1; fi
 cd "$HERE"
 go version
