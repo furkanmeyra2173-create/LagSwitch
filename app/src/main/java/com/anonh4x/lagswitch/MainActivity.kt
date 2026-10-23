@@ -9,10 +9,15 @@ import android.graphics.Color
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.Gravity
+import android.view.View
 import android.view.ViewGroup
 import android.widget.Button
+import android.widget.CheckBox
 import android.widget.LinearLayout
+import android.widget.SeekBar
 import android.widget.TextView
 import java.net.HttpURLConnection
 import java.net.URL
@@ -23,12 +28,26 @@ class MainActivity : Activity() {
     private lateinit var disconnect: Button
     private lateinit var testButton: Button
     private lateinit var testStatus: TextView
+    private lateinit var delayLabel: TextView
+    private lateinit var sizeLabel: TextView
+    private lateinit var onTimeLabel: TextView
+    private lateinit var offTimeLabel: TextView
+    private lateinit var autoCycle: CheckBox
     private var vpnActive = false
     private var lagEnabled = false
     private var testRunning = false
     private var statusMessage = "Tünel kapalı"
     private var receiverRegistered = false
     private val requestVpn = 41
+    private val uiHandler = Handler(Looper.getMainLooper())
+    private val prefs by lazy { getSharedPreferences(LagVpnService.PREFS, MODE_PRIVATE) }
+    private val cycleAction = Runnable {
+        if (autoCycle.isChecked && vpnActive) {
+            startService(Intent(this, LagVpnService::class.java)
+                .setAction(LagVpnService.ACTION_SET_DELAY)
+                .putExtra(LagVpnService.EXTRA_DELAY_ENABLED, !lagEnabled))
+        }
+    }
 
     private val stateReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
@@ -37,12 +56,12 @@ class MainActivity : Activity() {
             lagEnabled = intent.getBooleanExtra(LagVpnService.EXTRA_DELAY_ENABLED, false)
             statusMessage = intent.getStringExtra(LagVpnService.EXTRA_STATUS) ?: "Durum bilinmiyor"
             refresh()
+            scheduleCycle()
         }
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val prefs = getSharedPreferences(LagVpnService.PREFS, MODE_PRIVATE)
         vpnActive = prefs.getBoolean(LagVpnService.KEY_VPN_ACTIVE, false)
         lagEnabled = vpnActive && prefs.getBoolean(LagVpnService.KEY_DELAY_ENABLED, false)
         statusMessage = prefs.getString(LagVpnService.KEY_STATUS, "Tünel kapalı") ?: "Tünel kapalı"
@@ -60,36 +79,168 @@ class MainActivity : Activity() {
     private fun buildUi() {
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(28, 48, 28, 28)
+            setPadding(dp(22), dp(26), dp(22), dp(28))
             gravity = Gravity.CENTER_HORIZONTAL
-            setBackgroundColor(Color.rgb(13, 17, 23))
+            setBackgroundColor(Color.rgb(10, 13, 20))
         }
         val title = TextView(this).apply {
-            text = "ANONH4X  /  LAG SWITCH"
-            textSize = 23f
-            setTextColor(Color.rgb(0, 230, 170))
+            text = "ANONH4X"
+            textSize = 30f
+            setTypeface(null, android.graphics.Typeface.BOLD)
+            setTextColor(Color.rgb(0, 235, 170))
             gravity = Gravity.CENTER
         }
-        status = TextView(this).apply { textSize = 17f; setTextColor(Color.WHITE); gravity = Gravity.CENTER; setPadding(0, 28, 0, 20) }
-        toggle = Button(this).apply { textSize = 18f; setOnClickListener { onToggle() } }
-        disconnect = Button(this).apply { text = "VPN'İ KAPAT"; setOnClickListener { disconnectVpn() } }
-        testButton = Button(this).apply { text = "BAĞLANTIYI TEST ET"; setOnClickListener { runConnectivityTest() } }
+        val subtitle = TextView(this).apply {
+            text = "FAKE LAG  /  NETWORK CONTROL"
+            textSize = 12f
+            letterSpacing = 0.16f
+            setTextColor(Color.rgb(135, 151, 172))
+            gravity = Gravity.CENTER
+            setPadding(0, dp(3), 0, dp(12))
+        }
+        status = TextView(this).apply {
+            textSize = 15f
+            setTextColor(Color.WHITE)
+            gravity = Gravity.CENTER
+            setPadding(dp(12), dp(12), dp(12), dp(12))
+            setBackgroundColor(Color.rgb(23, 30, 42))
+        }
+        toggle = Button(this).apply {
+            textSize = 17f
+            setTextColor(Color.WHITE)
+            setBackgroundColor(Color.rgb(0, 160, 115))
+            setOnClickListener { onToggle() }
+        }
+        disconnect = Button(this).apply {
+            text = "VPN'İ TAMAMEN KAPAT"
+            setOnClickListener { disconnectVpn() }
+        }
+        testButton = Button(this).apply {
+            text = "BAĞLANTIYI TEST ET"
+            setOnClickListener { runConnectivityTest() }
+        }
         testStatus = TextView(this).apply {
-            text = "Test, uygulamanın gerçek VPN yolundan HTTPS isteği gönderir."
-            textSize = 14f; setTextColor(Color.LTGRAY); setPadding(0, 14, 0, 12)
+            text = "Bağlantı testi, uygulamanın VPN üzerinden erişimini kontrol eder."
+            textSize = 13f
+            setTextColor(Color.LTGRAY)
+            setPadding(0, dp(8), 0, dp(8))
+        }
+
+        val settingsTitle = TextView(this).apply {
+            text = "AYARLAR"
+            textSize = 16f
+            setTypeface(null, android.graphics.Typeface.BOLD)
+            setTextColor(Color.rgb(0, 235, 170))
+            setPadding(0, dp(20), 0, dp(5))
+        }
+        delayLabel = label("Paket gecikmesi: 1000 ms")
+        val delaySeek = SeekBar(this).apply {
+            max = 3000
+            progress = prefs.getInt(LagVpnService.KEY_DELAY_MS, 1000).coerceIn(0, 3000)
+            setOnSeekBarChangeListener(seekListener { value ->
+                prefs.edit().putInt(LagVpnService.KEY_DELAY_MS, value).apply()
+                delayLabel.text = "Paket gecikmesi: $value ms"
+            })
+        }
+        sizeLabel = label("Aç/Kapat düğmesi: 64 dp")
+        val sizeSeek = SeekBar(this).apply {
+            max = 56
+            progress = (prefs.getInt(KEY_BUTTON_SIZE, 64) - 48).coerceIn(0, 56)
+            setOnSeekBarChangeListener(seekListener { value ->
+                val size = value + 48
+                prefs.edit().putInt(KEY_BUTTON_SIZE, size).apply()
+                sizeLabel.text = "Aç/Kapat düğmesi: $size dp"
+                applyToggleSize(size)
+            })
+        }
+        autoCycle = CheckBox(this).apply {
+            text = "Otomatik aç/kapat döngüsü"
+            textSize = 14f
+            setTextColor(Color.WHITE)
+            isChecked = prefs.getBoolean(KEY_AUTO_CYCLE, false)
+            buttonTintList = android.content.res.ColorStateList.valueOf(Color.rgb(0, 235, 170))
+            setOnCheckedChangeListener { _, checked ->
+                prefs.edit().putBoolean(KEY_AUTO_CYCLE, checked).apply()
+                scheduleCycle()
+            }
+        }
+        onTimeLabel = label("Gecikme AÇIK süresi: 5 sn")
+        val onSeek = SeekBar(this).apply {
+            max = 29
+            progress = prefs.getInt(KEY_ON_SECONDS, 5).coerceIn(1, 30) - 1
+            setOnSeekBarChangeListener(seekListener { value ->
+                val seconds = value + 1
+                prefs.edit().putInt(KEY_ON_SECONDS, seconds).apply()
+                onTimeLabel.text = "Gecikme AÇIK süresi: $seconds sn"
+                scheduleCycle()
+            })
+        }
+        offTimeLabel = label("Gecikme KAPALI süresi: 5 sn")
+        val offSeek = SeekBar(this).apply {
+            max = 29
+            progress = prefs.getInt(KEY_OFF_SECONDS, 5).coerceIn(1, 30) - 1
+            setOnSeekBarChangeListener(seekListener { value ->
+                val seconds = value + 1
+                prefs.edit().putInt(KEY_OFF_SECONDS, seconds).apply()
+                offTimeLabel.text = "Gecikme KAPALI süresi: $seconds sn"
+                scheduleCycle()
+            })
         }
         val info = TextView(this).apply {
-            text = "Gecikme hedefi: 1000 ms her yön.\n\nYalnızca Oxide ve bu uygulamanın bağlantı testi tünelden geçer; diğer uygulamalar etkilenmez. DNS sorguları gecikmesiz bırakılır.\n\nLAG SWITCH • OFF gecikmeyi kapatır ama VPN'i açık tutar. Tamamen çıkmak için VPN'İ KAPAT düğmesini kullan. Oyunun sunucusu zaman aşımına uğrayabilir."
-            textSize = 14f; setTextColor(Color.LTGRAY); setPadding(0, 22, 0, 0)
+            text = "Gecikme ayarı 0–3000 ms arasındadır. Otomatik döngü, VPN açıkken seçtiğin AÇIK/KAPALI sürelerini tekrarlar. Yalnızca Oxide ve uygulama içi bağlantı testi tünelden geçecek şekilde yapılandırılmıştır; oyun bağlantısı yine de kesilebilir."
+            textSize = 12f
+            setTextColor(Color.rgb(150, 161, 178))
+            setPadding(0, dp(14), 0, 0)
         }
+
         root.addView(title, ViewGroup.LayoutParams(-1, -2))
+        root.addView(subtitle, ViewGroup.LayoutParams(-1, -2))
         root.addView(status, ViewGroup.LayoutParams(-1, -2))
-        root.addView(toggle, LinearLayout.LayoutParams(-1, -2))
+        root.addView(toggle, LinearLayout.LayoutParams(-1, dp(prefs.getInt(KEY_BUTTON_SIZE, 64))))
         root.addView(disconnect, LinearLayout.LayoutParams(-1, -2))
         root.addView(testButton, LinearLayout.LayoutParams(-1, -2))
         root.addView(testStatus, ViewGroup.LayoutParams(-1, -2))
+        root.addView(settingsTitle, ViewGroup.LayoutParams(-1, -2))
+        root.addView(delayLabel, ViewGroup.LayoutParams(-1, -2))
+        root.addView(delaySeek, ViewGroup.LayoutParams(-1, -2))
+        root.addView(sizeLabel, ViewGroup.LayoutParams(-1, -2))
+        root.addView(sizeSeek, ViewGroup.LayoutParams(-1, -2))
+        root.addView(autoCycle, ViewGroup.LayoutParams(-1, -2))
+        root.addView(onTimeLabel, ViewGroup.LayoutParams(-1, -2))
+        root.addView(onSeek, ViewGroup.LayoutParams(-1, -2))
+        root.addView(offTimeLabel, ViewGroup.LayoutParams(-1, -2))
+        root.addView(offSeek, ViewGroup.LayoutParams(-1, -2))
         root.addView(info, ViewGroup.LayoutParams(-1, -2))
-        setContentView(root)
+        val scroll = android.widget.ScrollView(this).apply {
+            isFillViewport = true
+            addView(root)
+        }
+        setContentView(scroll)
+    }
+
+    private fun label(value: String) = TextView(this).apply {
+        text = value
+        textSize = 13f
+        setTextColor(Color.rgb(220, 228, 239))
+        setPadding(0, dp(8), 0, 0)
+    }
+
+    private fun seekListener(onChange: (Int) -> Unit) = object : SeekBar.OnSeekBarChangeListener {
+        override fun onProgressChanged(seekBar: SeekBar?, progress: Int, fromUser: Boolean) { onChange(progress) }
+        override fun onStartTrackingTouch(seekBar: SeekBar?) {}
+        override fun onStopTrackingTouch(seekBar: SeekBar?) {}
+    }
+
+    private fun applyToggleSize(size: Int) {
+        toggle.layoutParams = toggle.layoutParams?.apply { height = dp(size) }
+        toggle.requestLayout()
+    }
+
+    private fun scheduleCycle() {
+        uiHandler.removeCallbacks(cycleAction)
+        if (!::autoCycle.isInitialized || !autoCycle.isChecked || !vpnActive) return
+        val seconds = if (lagEnabled) prefs.getInt(KEY_ON_SECONDS, 5) else prefs.getInt(KEY_OFF_SECONDS, 5)
+        uiHandler.postDelayed(cycleAction, seconds.coerceIn(1, 30) * 1000L)
     }
 
     private fun onToggle() {
@@ -99,6 +250,7 @@ class MainActivity : Activity() {
             refresh()
             startService(Intent(this, LagVpnService::class.java).setAction(LagVpnService.ACTION_SET_DELAY)
                 .putExtra(LagVpnService.EXTRA_DELAY_ENABLED, next))
+            scheduleCycle()
             return
         }
         statusMessage = "VPN tüneli başlatılıyor…"
@@ -114,6 +266,7 @@ class MainActivity : Activity() {
 
     private fun disconnectVpn() {
         if (!vpnActive) return
+        uiHandler.removeCallbacks(cycleAction)
         statusMessage = "VPN kapatılıyor…"
         refresh()
         startService(Intent(this, LagVpnService::class.java).setAction(LagVpnService.ACTION_STOP))
@@ -146,7 +299,7 @@ class MainActivity : Activity() {
                 testRunning = false
                 refresh()
             }
-        }.apply { name = "LagSwitch-ConnectivityTest"; isDaemon = true }.start()
+        }.apply { name = "AnonH4X-ConnectivityTest"; isDaemon = true }.start()
     }
 
     @Deprecated("Deprecated API retained for broad device compatibility")
@@ -159,14 +312,25 @@ class MainActivity : Activity() {
     }
 
     private fun refresh() {
-        status.text = "DURUM: ${statusMessage}"
-        toggle.text = if (lagEnabled) "LAG SWITCH  •  OFF" else "LAG SWITCH  •  ON"
+        status.text = "DURUM: $statusMessage"
+        toggle.text = if (lagEnabled) "LAG SWITCH  •  KAPAT" else "LAG SWITCH  •  AÇ"
+        toggle.setBackgroundColor(if (lagEnabled) Color.rgb(180, 58, 66) else Color.rgb(0, 160, 115))
         disconnect.isEnabled = vpnActive
         testButton.isEnabled = vpnActive && !testRunning
     }
 
+    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
+
     override fun onDestroy() {
+        uiHandler.removeCallbacks(cycleAction)
         if (receiverRegistered) unregisterReceiver(stateReceiver)
         super.onDestroy()
+    }
+
+    companion object {
+        private const val KEY_BUTTON_SIZE = "button_size_dp"
+        private const val KEY_AUTO_CYCLE = "auto_cycle"
+        private const val KEY_ON_SECONDS = "on_seconds"
+        private const val KEY_OFF_SECONDS = "off_seconds"
     }
 }
