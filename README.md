@@ -1,17 +1,29 @@
-# Lag Switch (Android prototype)
+# ANONH4X LagSwitch (Android)
 
-Rootless Android VPN-based network latency experiment.
+Rootless Android VPN app for a controlled network-delay experiment.
 
-## Current state
-This is a **starter scaffold, not yet a working network lag switch**. It contains the app UI, ON/OFF button, VPN permission request, VPN service lifecycle, and GitHub Actions APK workflow. It does not yet include a packet-forwarding engine, so it does not delay or forward game traffic.
+## Implemented path
 
-This is deliberate: creating a VPN TUN interface without a complete forwarding engine would break connectivity instead of creating a controlled 1000 ms delay.
+- Android VpnService TUN interface with IPv4 and IPv6 routes.
+- A userspace TCP/IP stack based on gVisor is built into an Android AAR during GitHub Actions.
+- TCP and UDP flows are relayed to their original destination using upstream sockets protected with VpnService.protect().
+- Bounded FIFO queues add a 1000 ms release delay in both directions while the switch is ON.
+- The ON/OFF switch changes the delay policy while keeping the VPN tunnel running.
+- Only Oxide: Survival Island and the app's own HTTPS connectivity test are included in the VPN; other apps remain outside it.
+- DNS ports 53 and 853 bypass artificial delay.
+- Unit tests cover configured delay, zero-delay pass-through, bounded queue backpressure and ordering.
 
-## Build from your phone
-1. Open the Actions tab and enable workflows if prompted.
-2. Run **Build Lag Switch APK**, or push a commit.
-3. Open the completed workflow run and download the `LagSwitch-debug-apk` artifact.
-4. Extract the artifact ZIP and install `app-debug.apk`.
+## Important limitations
 
-## Next step
-Add and test an Android-compatible TUN-to-socket forwarding engine, then implement bounded packet/flow queues and a 1000 ms delay policy. Delaying TCP/UDP can cause timeouts and cannot guarantee that only remote players in a game are affected.
+This is an experimental latency test, not a guarantee that an online game will stay connected. Delay is applied to queued TCP byte chunks and UDP datagrams, not physical radio frames. Delaying upload and download can add around two seconds or more to request/response interactions; the game server may time out. The game's own traffic is delayed too, so it cannot selectively affect only opponents.
+
+The built-in HTTPS test verifies this app's route through the local TUN, not every Oxide server or gameplay protocol. First test with VPN on and lag delay OFF, then test with delay ON. Use VPN'İ KAPAT to restore normal Android routing. Android only permits one active VPN at a time.
+
+## Build from an Android phone
+
+1. Open https://github.com/furkanmeyra2173-create/LagSwitch/actions
+2. Open the latest Build Lag Switch APK run.
+3. Verify both the gVisor AAR build and unit-test/APK-build steps passed.
+4. Download the LagSwitch-debug-apk artifact, extract it, and install app-debug.apk.
+
+A green APK step alone is not enough; the earlier gVisor/AAR build and queue tests must also pass. Device-level connectivity still needs to be tested on the phone.

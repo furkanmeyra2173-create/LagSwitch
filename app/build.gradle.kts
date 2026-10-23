@@ -2,25 +2,26 @@ plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
 }
-
 android {
     namespace = "com.anonh4x.lagswitch"
     compileSdk = 35
-
-    // Keep Java and Kotlin bytecode targets aligned for CI.
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions {
-        jvmTarget = "17"
-    }
-
+    kotlinOptions { jvmTarget = "17" }
     defaultConfig {
         applicationId = "com.anonh4x.lagswitch"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = 2
+        versionName = "0.2.0"
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
+    testOptions { unitTests.isReturnDefaultValues = true }
+}
+dependencies {
+    implementation(files("libs/netstack.aar"))
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+    testImplementation("junit:junit:4.13.2")
 }
