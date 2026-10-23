@@ -194,7 +194,7 @@ class MainActivity : Activity() {
             })
         }
         val info = TextView(this).apply {
-            text = "Gecikme ayarı 0–3000 ms arasındadır. Otomatik döngü, VPN açıkken seçtiğin AÇIK/KAPALI sürelerini tekrarlar. Yalnızca Oxide ve uygulama içi bağlantı testi tünelden geçecek şekilde yapılandırılmıştır; oyun bağlantısı yine de kesilebilir."
+            text = "Gecikme ayarı 0–3000 ms arasındadır. VPN gecikme KAPALI başlar; Oxide tamamen açıldıktan sonra LAG'i aç. Otomatik döngü, VPN açıkken seçtiğin AÇIK/KAPALI sürelerini tekrarlar. Seçtiğin uygulamaların trafiği tünelden geçer; yüksek gecikme oyunun bağlantısını kesebilir."
             textSize = 12f
             setTextColor(Color.rgb(150, 161, 178))
             setPadding(0, dp(14), 0, 0)
