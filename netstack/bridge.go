@@ -81,7 +81,12 @@ func (t *Tunnel) Stop() error {
 	t.closed = true
 	close(t.stopCh)
 	t.logf(1, "netstack stopping")
+	// Close transport endpoints, then wait for link endpoint workers to exit.
+	// fdbased.New does not own the TUN FD; the Android service closes it only
+	// after this method returns. Waiting here prevents native workers from
+	// touching an FD that has already been closed/reused during a VPN restart.
 	t.stack.Close()
+	t.stack.Wait()
 	return nil
 }
 func (t *Tunnel) installTCPForwarder() {

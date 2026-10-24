@@ -124,8 +124,8 @@ class LagVpnService : VpnService() {
             .orEmpty()
         // Keep the per-app VPN allow-list stable while the floating toggle is used.
         // Rebuilding a native TUN/netstack for every tap caused a fragile teardown/restart
-        // cycle. The selected apps always use the relay; Fake Lag OFF means zero artificial
-        // delay/loss and an unlimited rate only if the saved bandwidth setting is unlimited.
+        // cycle. The selected apps always use the relay; Fake Lag OFF disables artificial
+        // delay, packet loss and bandwidth throttling.
         (selectedPackages + packageName).forEach { selectedPackage ->
             try {
                 builder.addAllowedApplication(selectedPackage)
