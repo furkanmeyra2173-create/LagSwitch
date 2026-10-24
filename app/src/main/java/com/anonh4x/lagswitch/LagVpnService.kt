@@ -81,7 +81,14 @@ class LagVpnService : VpnService() {
         try {
             val pfd = buildTun()
             val fd = pfd.detachFd()
-            val newEngine = NetstackEngine(this@LagVpnService, { lagEnabled }, { getSharedPreferences(PREFS, MODE_PRIVATE).getInt(KEY_DELAY_MS, 1000).toLong() })
+            val networkPrefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+            val newEngine = NetstackEngine(
+                this@LagVpnService,
+                { lagEnabled },
+                { networkPrefs.getInt(KEY_DELAY_MS, 1000).toLong() },
+                { networkPrefs.getInt(KEY_LOSS_PERCENT, 0).coerceIn(0, 50) },
+                { networkPrefs.getInt(KEY_BANDWIDTH_KBPS, 0).coerceIn(0, 10_000) },
+            )
             try { newEngine.start(fd) }
             catch (t: Throwable) {
                 runCatching { ParcelFileDescriptor.adoptFd(fd).close() }
@@ -383,6 +390,8 @@ class LagVpnService : VpnService() {
         const val KEY_DELAY_ENABLED = "delay_enabled"
         const val KEY_STATUS = "status_text"
         const val KEY_DELAY_MS = "delay_ms"
+        const val KEY_LOSS_PERCENT = "loss_percent"
+        const val KEY_BANDWIDTH_KBPS = "bandwidth_kbps"
         private const val KEY_FLOATING_X = "floating_button_x"
         private const val KEY_FLOATING_Y = "floating_button_y"
         private const val KEY_SELECTED_APPS = "selected_apps"
