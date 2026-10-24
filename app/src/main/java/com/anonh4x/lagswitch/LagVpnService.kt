@@ -27,6 +27,7 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.IOException
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
 /** Owns the TUN and routes only Oxide and the in-app connectivity test through it. */
@@ -37,6 +38,7 @@ class LagVpnService : VpnService() {
     @Volatile internal var lagEnabled = false
         private set
     @Volatile private var starting = false
+    private val restartInProgress = AtomicBoolean(false)
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var windowManager: WindowManager? = null
     private var floatingButton: TextView? = null
@@ -49,7 +51,9 @@ class LagVpnService : VpnService() {
             ACTION_RESIZE_OVERLAY -> serviceScope.launch { withContext(Dispatchers.Main) { hideFloatingButton(); showFloatingButton() } }
             ACTION_SET_DELAY -> setDelay(intent.getBooleanExtra(EXTRA_DELAY_ENABLED, false))
             ACTION_START, null -> {
-                if (engine == null) {
+                if (restartInProgress.get()) {
+                    Log.i(TAG, "Ignoring start while VPN routes are being rebuilt")
+                } else if (engine == null) {
                     // Start with lag disabled so the game can finish loading its network
                     // session before the user deliberately enables packet delay.
                     lagEnabled = false
@@ -63,31 +67,37 @@ class LagVpnService : VpnService() {
     }
 
     private fun beginStart() {
-        if (starting || engine != null) return
+        if (starting || engine != null || restartInProgress.get()) return
         starting = true
-        publishState(false, false, "Tünel kuruluyor…")
+        publishState(false, lagEnabled, "Tünel kuruluyor…")
         serviceScope.launch {
-            try {
-                val pfd = buildTun()
-                val fd = pfd.detachFd()
-                val newEngine = NetstackEngine(this@LagVpnService, { lagEnabled }, { (getSharedPreferences(PREFS, MODE_PRIVATE).getInt(KEY_DELAY_MS, 1000)).toLong() })
-                try { newEngine.start(fd) }
-                catch (t: Throwable) {
-                    runCatching { ParcelFileDescriptor.adoptFd(fd).close() }
-                    throw t
-                }
-                detachedTunFd.set(fd)
-                engine = newEngine
-                vpnActive = true
-                withContext(Dispatchers.Main) { showFloatingButton() }
-                publishState(true, lagEnabled, if (lagEnabled) "VPN açık • gecikme AÇIK (gecikme ayarına göre)" else "VPN açık • gecikme KAPALI")
-                refreshNotification()
-                Log.i(TAG, "VPN started; delayEnabled=$lagEnabled")
-            } catch (t: Throwable) {
-                if (t is kotlinx.coroutines.CancellationException) throw t
-                Log.e(TAG, "VPN start failed", t)
-                failAndStop("HATA: ${t.message ?: t.javaClass.simpleName}")
-            } finally { starting = false }
+            try { startTunnelNow() }
+            finally { starting = false }
+        }
+    }
+
+    /** Performs one complete VPN start in the caller's coroutine. */
+    private suspend fun startTunnelNow() {
+        try {
+            val pfd = buildTun()
+            val fd = pfd.detachFd()
+            val newEngine = NetstackEngine(this@LagVpnService, { lagEnabled }, { getSharedPreferences(PREFS, MODE_PRIVATE).getInt(KEY_DELAY_MS, 1000).toLong() })
+            try { newEngine.start(fd) }
+            catch (t: Throwable) {
+                runCatching { ParcelFileDescriptor.adoptFd(fd).close() }
+                throw t
+            }
+            detachedTunFd.set(fd)
+            engine = newEngine
+            vpnActive = true
+            withContext(Dispatchers.Main) { showFloatingButton() }
+            publishState(true, lagEnabled, if (lagEnabled) "VPN açık • gecikme AÇIK (gecikme ayarına göre)" else "VPN açık • gecikme KAPALI")
+            refreshNotification()
+            Log.i(TAG, "VPN started; delayEnabled=$lagEnabled")
+        } catch (t: Throwable) {
+            if (t is kotlinx.coroutines.CancellationException) throw t
+            Log.e(TAG, "VPN start failed", t)
+            failAndStop("HATA: ${t.message ?: t.javaClass.simpleName}")
         }
     }
 
@@ -121,16 +131,21 @@ class LagVpnService : VpnService() {
     }
 
     private fun setDelay(enabled: Boolean) {
+        // Ignore rapid repeat taps until the current route change has fully completed.
+        if (restartInProgress.get()) {
+            Log.i(TAG, "Ignoring repeated toggle while VPN restart is in progress")
+            return
+        }
         if (engine == null || !vpnActive) {
+            if (starting) return
             lagEnabled = enabled
-            if (!starting) { enterForeground(); beginStart() }
+            enterForeground()
+            beginStart()
             return
         }
         if (lagEnabled == enabled) return
 
-        // The app allow-list is part of Android's established VPN interface. Rebuild the
-        // tunnel when toggling so OFF really bypasses the selected apps, rather than merely
-        // removing queue delay while still forcing all their traffic through the relay.
+        // Rebuild the VPN because Android's per-app allow-list cannot be changed in-place.
         lagEnabled = enabled
         Log.i(TAG, "Fake Lag changed to $enabled; rebuilding VPN package routes")
         requestRestart()
@@ -160,6 +175,9 @@ class LagVpnService : VpnService() {
             isClickable = true
             setOnClickListener { if (vpnActive) setDelay(!lagEnabled) }
         }
+        val overlayPrefs = getSharedPreferences(PREFS, MODE_PRIVATE)
+        val screenWidth = resources.displayMetrics.widthPixels
+        val screenHeight = resources.displayMetrics.heightPixels
         val params = WindowManager.LayoutParams(
             widthPx, sizePx,
             WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
@@ -167,8 +185,10 @@ class LagVpnService : VpnService() {
             PixelFormat.TRANSLUCENT
         ).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = (16 * resources.displayMetrics.density).toInt()
-            y = (220 * resources.displayMetrics.density).toInt()
+            x = overlayPrefs.getInt(KEY_FLOATING_X, (16 * resources.displayMetrics.density).toInt())
+                .coerceIn(0, (screenWidth - widthPx).coerceAtLeast(0))
+            y = overlayPrefs.getInt(KEY_FLOATING_Y, (220 * resources.displayMetrics.density).toInt())
+                .coerceIn(0, (screenHeight - sizePx).coerceAtLeast(0))
         }
         var downX = 0f
         var downY = 0f
@@ -197,7 +217,14 @@ class LagVpnService : VpnService() {
                     true
                 }
                 MotionEvent.ACTION_UP -> {
-                    if (!dragged) view.performClick()
+                    if (!dragged) {
+                        view.performClick()
+                    } else {
+                        params.x = params.x.coerceIn(0, (resources.displayMetrics.widthPixels - widthPx).coerceAtLeast(0))
+                        params.y = params.y.coerceIn(0, (resources.displayMetrics.heightPixels - sizePx).coerceAtLeast(0))
+                        runCatching { windowManager?.updateViewLayout(view, params) }
+                        saveFloatingPosition()
+                    }
                     true
                 }
                 else -> true
@@ -220,7 +247,16 @@ class LagVpnService : VpnService() {
         )
     }
 
+    private fun saveFloatingPosition() {
+        val params = floatingParams ?: return
+        getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+            .putInt(KEY_FLOATING_X, params.x)
+            .putInt(KEY_FLOATING_Y, params.y)
+            .apply()
+    }
+
     private fun hideFloatingButton() {
+        saveFloatingPosition()
         val button = floatingButton
         if (button != null) runCatching { windowManager?.removeView(button) }
         floatingButton = null
@@ -230,19 +266,32 @@ class LagVpnService : VpnService() {
 
     private fun requestStop(message: String) { serviceScope.launch { stopTunnel(message) } }
     private fun requestRestart() {
+        if (!restartInProgress.compareAndSet(false, true)) {
+            Log.i(TAG, "Ignoring duplicate VPN restart request")
+            return
+        }
         serviceScope.launch {
-            val previousLagState = lagEnabled
-            withContext(Dispatchers.Main) { hideFloatingButton() }
-            val oldEngine = engine
-            engine = null
-            vpnActive = false
-            runCatching { oldEngine?.stop() }
-            val oldFd = detachedTunFd.getAndSet(-1)
-            if (oldFd >= 0) runCatching { ParcelFileDescriptor.adoptFd(oldFd).close() }
-            lagEnabled = previousLagState
-            publishState(false, false, "Seçilen uygulamalarla VPN yeniden kuruluyor…")
-            starting = false
-            beginStart()
+            try {
+                val desiredLagState = lagEnabled
+                publishState(false, desiredLagState, "Yönlendirme değiştiriliyor… VPN yeniden kuruluyor")
+                withContext(Dispatchers.Main) { hideFloatingButton() }
+
+                val oldEngine = engine
+                engine = null
+                vpnActive = false
+                runCatching { oldEngine?.stop() }
+                val oldFd = detachedTunFd.getAndSet(-1)
+                if (oldFd >= 0) runCatching { ParcelFileDescriptor.adoptFd(oldFd).close() }
+
+                // Keep this operation serialized through the full replacement start.
+                lagEnabled = desiredLagState
+                starting = true
+                publishState(false, lagEnabled, "VPN yönlendirmesi yeniden kuruluyor…")
+                startTunnelNow()
+            } finally {
+                starting = false
+                restartInProgress.set(false)
+            }
         }
     }
     private suspend fun failAndStop(message: String) = stopTunnel(message)
@@ -334,6 +383,8 @@ class LagVpnService : VpnService() {
         const val KEY_DELAY_ENABLED = "delay_enabled"
         const val KEY_STATUS = "status_text"
         const val KEY_DELAY_MS = "delay_ms"
+        private const val KEY_FLOATING_X = "floating_button_x"
+        private const val KEY_FLOATING_Y = "floating_button_y"
         private const val KEY_SELECTED_APPS = "selected_apps"
         private const val TAG = "LagSwitch"
         private const val CHANNEL_ID = "lagswitch_vpn"
