@@ -10,7 +10,8 @@ Rootless Android VPN app for a controlled network-delay experiment.
 - Bounded FIFO queues apply configurable latency in both directions while the switch is ON.
 - Configurable UDP datagram loss (0–50%) is simulated by safely dropping whole UDP datagrams; TCP byte streams are never corrupted by deleting bytes.
 - Configurable bandwidth caps (unlimited or 50–10,000 kbit/s) pace traffic per direction across all selected-app flows.
-- The ON/OFF switch changes the delay/loss/bandwidth policy while keeping the VPN tunnel available to selected applications.
+- The floating ON/OFF switch changes the delay/loss/bandwidth policy in place without rebuilding the VPN interface.
+- App-list changes are saved immediately but require a manual VPN disconnect/reconnect to update Android's per-app VPN allow-list.
 - Only Oxide: Survival Island and the app's own HTTPS connectivity test are included in the VPN; other apps remain outside it.
 - DNS ports 53 and 853 bypass artificial delay.
 - Unit tests cover configured delay, zero-delay pass-through, bounded queue backpressure and ordering.
@@ -19,7 +20,7 @@ Rootless Android VPN app for a controlled network-delay experiment.
 
 This is an experimental network-condition test, not a guarantee that an online game will stay connected. Delay is applied to queued TCP byte chunks and UDP datagrams, not physical radio frames. UDP packet loss is simulated at the datagram relay layer; this is not a raw-IP packet dropper, and TCP retransmission loss is not simulated by deleting TCP stream bytes. Bandwidth is capped independently per direction across selected-app flows. Delaying upload and download can add around two seconds or more to request/response interactions; the game server may time out. The game's own traffic is delayed too, so it cannot selectively affect only opponents.
 
-The built-in HTTPS test verifies this app's route through the local TUN, not every Oxide server or gameplay protocol. First test with VPN on and lag delay OFF, then test with delay ON. Use VPN'İ KAPAT to restore normal Android routing. Android only permits one active VPN at a time.
+The built-in HTTPS test verifies this app's route through the local TUN, not every Oxide server or gameplay protocol. First test with VPN on and Fake Lag OFF, then test with it ON. The floating switch intentionally keeps the same TUN/netstack instance alive. If you change the selected-app list while connected, disconnect and reconnect VPN once to apply the new allow-list. Use VPN'İ KAPAT to restore normal Android routing. Android only permits one active VPN at a time.
 
 ## Build from an Android phone
 

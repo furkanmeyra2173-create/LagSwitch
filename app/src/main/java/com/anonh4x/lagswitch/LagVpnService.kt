@@ -122,17 +122,18 @@ class LagVpnService : VpnService() {
             .getStringSet(KEY_SELECTED_APPS, setOf(OXIDE_PACKAGE))
             ?.toSet()
             .orEmpty()
-        // When Fake Lag is OFF, let selected games use Android's normal network.
-        // Only route selected packages through the custom netstack while delay is ON.
-        val packagesToRoute = if (lagEnabled) selectedPackages else emptySet()
-        (packagesToRoute + packageName).forEach { selectedPackage ->
+        // Keep the per-app VPN allow-list stable while the floating toggle is used.
+        // Rebuilding a native TUN/netstack for every tap caused a fragile teardown/restart
+        // cycle. The selected apps always use the relay; Fake Lag OFF means zero artificial
+        // delay/loss and an unlimited rate only if the saved bandwidth setting is unlimited.
+        (selectedPackages + packageName).forEach { selectedPackage ->
             try {
                 builder.addAllowedApplication(selectedPackage)
             } catch (e: PackageManager.NameNotFoundException) {
                 Log.w(TAG, "Selected app is no longer installed: " + selectedPackage, e)
             }
         }
-        Log.i(TAG, "VPN routing mode: delayEnabled=${lagEnabled}; routedPackages=${(packagesToRoute + packageName).joinToString()}")
+        Log.i(TAG, "VPN routing mode: selectedPackages=${(selectedPackages + packageName).joinToString()}; fakeLag=${lagEnabled}")
         builder.setBlocking(true)
         return builder.establish() ?: throw IOException("Android VPN tünelini kuramadı veya izin geri alındı.")
     }
@@ -152,10 +153,20 @@ class LagVpnService : VpnService() {
         }
         if (lagEnabled == enabled) return
 
-        // Rebuild the VPN because Android's per-app allow-list cannot be changed in-place.
+        // Toggle the policy in place. Do not close/recreate the TUN or native netstack
+        // on a button press; this keeps the floating overlay and active game sockets stable.
         lagEnabled = enabled
-        Log.i(TAG, "Fake Lag changed to $enabled; rebuilding VPN package routes")
-        requestRestart()
+        val message = if (enabled) {
+            "VPN açık • Fake Lag AÇIK"
+        } else {
+            "VPN açık • Fake Lag KAPALI"
+        }
+        runCatching { updateFloatingButton() }
+            .onFailure { Log.w(TAG, "Floating control refresh failed", it) }
+        runCatching { refreshNotification() }
+            .onFailure { Log.w(TAG, "VPN notification refresh failed", it) }
+        publishState(true, enabled, message)
+        Log.i(TAG, "Fake Lag changed live to $enabled; VPN interface kept running")
     }
 
     private fun showFloatingButton() {

@@ -260,7 +260,7 @@ class MainActivity : Activity() {
             setPadding(0, dp(22), 0, dp(5))
         }
         val appDescription = TextView(this).apply {
-            text = "İşaretlediğin uygulamaların trafiği gecikme tünelinden geçer. Seçimi değiştirdikten sonra aşağıdaki düğmeye bas."
+            text = "İşaretlediğin uygulamalar VPN üzerinden yönlendirilir. Seçimi kaydet; VPN açıksa yeni listeyi uygulamak için VPN'i kapatıp yeniden aç."
             textSize = 12f
             setTextColor(Color.rgb(150, 161, 178))
             setPadding(0, 0, 0, dp(8))
@@ -332,15 +332,13 @@ class MainActivity : Activity() {
 
     private fun applySelectedApps() {
         prefs.edit().putStringSet(KEY_SELECTED_APPS, selectedApps.toSet()).apply()
-        if (vpnActive) {
-            statusMessage = "Uygulama listesi uygulanıyor; VPN yeniden bağlanıyor…"
-            refresh()
-            startService(Intent(this, LagVpnService::class.java).setAction(LagVpnService.ACTION_RESTART))
+        statusMessage = if (vpnActive) {
+            "Seçim kaydedildi. Yeni uygulama listesini uygulamak için VPN'i kapatıp yeniden aç."
         } else {
-            statusMessage = "Seçim kaydedildi. VPN'i başlatınca uygulanacak."
-            refresh()
-            android.widget.Toast.makeText(this, statusMessage, android.widget.Toast.LENGTH_LONG).show()
+            "Seçim kaydedildi. VPN'i başlatınca uygulanacak."
         }
+        refresh()
+        android.widget.Toast.makeText(this, statusMessage, android.widget.Toast.LENGTH_LONG).show()
     }
 
     private fun applyToggleSize(size: Int) {
