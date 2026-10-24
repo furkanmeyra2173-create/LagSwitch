@@ -34,8 +34,14 @@ import java.util.concurrent.atomic.AtomicInteger
 internal class NetstackEngine(
     private val vpnService: VpnService,
     private val delayEnabled: () -> Boolean,
-    private val configuredDelayMs: () -> Long,
+    private val configuredUploadDelayMs: () -> Long,
+    private val configuredDownloadDelayMs: () -> Long,
+    private val configuredJitterMs: () -> Long,
     private val configuredLossPercent: () -> Int,
+    private val configuredBurstLossPercent: () -> Int,
+    private val configuredDuplicationPercent: () -> Int,
+    private val configuredCorruptionPercent: () -> Int,
+    private val configuredReorderPercent: () -> Int,
     private val configuredBandwidthKbps: () -> Int,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -122,7 +128,7 @@ internal class NetstackEngine(
                         pipeBytes(
                             read = { buffer -> try { appSide.read(buffer).toInt() } catch (_: Exception) { -1 } },
                             write = { bytes -> output.write(bytes); output.flush() },
-                            delayTraffic = !bypassDelay, limiter = uploadLimiter,
+                            delayTraffic = !bypassDelay, baseDelayMs = configuredUploadDelayMs, limiter = uploadLimiter,
                             bandwidthKbps = configuredBandwidthKbps, abortFlow = ::closeFlow,
                         )
                     } finally { closeFlow() }
@@ -132,7 +138,7 @@ internal class NetstackEngine(
                         pipeBytes(
                             read = { buffer -> input.read(buffer) },
                             write = { bytes -> appSide.write(bytes) },
-                            delayTraffic = !bypassDelay, limiter = downloadLimiter,
+                            delayTraffic = !bypassDelay, baseDelayMs = configuredDownloadDelayMs, limiter = downloadLimiter,
                             bandwidthKbps = configuredBandwidthKbps, abortFlow = ::closeFlow,
                         )
                     } finally { closeFlow() }
@@ -169,8 +175,10 @@ internal class NetstackEngine(
                         pipeDatagrams(
                             read = { appSide.receive() },
                             write = { bytes -> socket.send(DatagramPacket(bytes, bytes.size)) },
-                            delayTraffic = !bypassDelay, limiter = uploadLimiter,
-                            lossPercent = configuredLossPercent, bandwidthKbps = configuredBandwidthKbps,
+                            delayTraffic = !bypassDelay, baseDelayMs = configuredUploadDelayMs, limiter = uploadLimiter,
+                            lossPercent = configuredLossPercent, burstLossPercent = configuredBurstLossPercent,
+                            duplicationPercent = configuredDuplicationPercent, corruptionPercent = configuredCorruptionPercent,
+                            reorderPercent = configuredReorderPercent, bandwidthKbps = configuredBandwidthKbps,
                             abortFlow = ::closeFlow,
                         )
                     } finally { closeFlow() }
@@ -184,8 +192,10 @@ internal class NetstackEngine(
                                 receiveBuffer.copyOf(receivePacket.length)
                             },
                             write = { bytes -> appSide.send(bytes) },
-                            delayTraffic = !bypassDelay, limiter = downloadLimiter,
-                            lossPercent = configuredLossPercent, bandwidthKbps = configuredBandwidthKbps,
+                            delayTraffic = !bypassDelay, baseDelayMs = configuredDownloadDelayMs, limiter = downloadLimiter,
+                            lossPercent = configuredLossPercent, burstLossPercent = configuredBurstLossPercent,
+                            duplicationPercent = configuredDuplicationPercent, corruptionPercent = configuredCorruptionPercent,
+                            reorderPercent = configuredReorderPercent, bandwidthKbps = configuredBandwidthKbps,
                             abortFlow = ::closeFlow,
                         )
                     } finally { closeFlow() }
@@ -200,12 +210,20 @@ internal class NetstackEngine(
         }
     }
 
+    private fun sampleDelayMs(baseDelayMs: () -> Long): Long {
+        val base = baseDelayMs().coerceIn(0L, 3000L)
+        val jitter = configuredJitterMs().coerceIn(0L, 1000L)
+        if (jitter == 0L) return base
+        val offset = Random.nextLong(-jitter, jitter + 1L)
+        return (base + offset).coerceIn(0L, 3000L)
+    }
+
     private suspend fun pipeBytes(
         read: (ByteArray) -> Int, write: (ByteArray) -> Unit,
-        delayTraffic: Boolean, limiter: BandwidthLimiter,
+        delayTraffic: Boolean, baseDelayMs: () -> Long, limiter: BandwidthLimiter,
         bandwidthKbps: () -> Int, abortFlow: () -> Unit,
     ) = coroutineScope {
-        val queue = DelayQueue<ByteArray>(TCP_QUEUE_ITEMS, { if (delayTraffic && delayEnabled()) configuredDelayMs().coerceIn(0L, 3000L) else 0L })
+        val queue = DelayQueue<ByteArray>(TCP_QUEUE_ITEMS, { if (delayTraffic && delayEnabled()) sampleDelayMs(baseDelayMs) else 0L })
         val producer = launch(Dispatchers.IO) {
             val buffer = ByteArray(TCP_CHUNK_SIZE)
             try {
@@ -233,21 +251,78 @@ internal class NetstackEngine(
 
     private suspend fun pipeDatagrams(
         read: () -> ByteArray?, write: (ByteArray) -> Unit,
-        delayTraffic: Boolean, limiter: BandwidthLimiter,
-        lossPercent: () -> Int, bandwidthKbps: () -> Int,
-        abortFlow: () -> Unit,
+        delayTraffic: Boolean, baseDelayMs: () -> Long, limiter: BandwidthLimiter,
+        lossPercent: () -> Int, burstLossPercent: () -> Int,
+        duplicationPercent: () -> Int, corruptionPercent: () -> Int, reorderPercent: () -> Int,
+        bandwidthKbps: () -> Int, abortFlow: () -> Unit,
     ) = coroutineScope {
-        val queue = DelayQueue<ByteArray>(UDP_QUEUE_ITEMS, { if (delayTraffic && delayEnabled()) configuredDelayMs().coerceIn(0L, 3000L) else 0L })
+        val queue = DelayQueue<ByteArray>(UDP_QUEUE_ITEMS, { if (delayTraffic && delayEnabled()) sampleDelayMs(baseDelayMs) else 0L })
         val producer = launch(Dispatchers.IO) {
-            try {
-                while (isActive) {
-                    val packet = read() ?: break
-                    // UDP datagrams can be discarded safely; never remove bytes from a TCP stream.
-                    val loss = if (delayTraffic && delayEnabled()) lossPercent().coerceIn(0, 50) else 0
-                    if (loss > 0 && Random.nextInt(100) < loss) continue
+            var burstRemaining = 0
+            var heldForReorder: ByteArray? = null
+
+            suspend fun enqueuePossiblyReordered(packet: ByteArray) {
+                val pending = heldForReorder
+                val reorderChance = if (delayTraffic && delayEnabled()) reorderPercent().coerceIn(0, 100) else 0
+                if (pending != null) {
+                    if (reorderChance > 0 && Random.nextInt(100) < reorderChance) {
+                        queue.offer(packet)
+                        queue.offer(pending)
+                    } else {
+                        queue.offer(pending)
+                        queue.offer(packet)
+                    }
+                    heldForReorder = null
+                } else if (reorderChance > 0 && Random.nextInt(100) < reorderChance) {
+                    heldForReorder = packet
+                } else {
                     queue.offer(packet)
                 }
-            } finally { queue.close() }
+            }
+
+            try {
+                while (isActive) {
+                    val incoming = read() ?: break
+                    val impair = delayTraffic && delayEnabled()
+                    if (impair) {
+                        if (burstRemaining > 0) {
+                            burstRemaining--
+                            continue
+                        }
+                        val loss = lossPercent().coerceIn(0, 100)
+                        if (loss > 0 && Random.nextInt(100) < loss) continue
+
+                        val burstChance = burstLossPercent().coerceIn(0, 100)
+                        if (burstChance > 0 && Random.nextInt(100) < burstChance) {
+                            // Drop this datagram and a short follow-up burst to simulate a bad radio link.
+                            burstRemaining = Random.nextInt(1, 5)
+                            continue
+                        }
+                    }
+
+                    var outgoing = incoming
+                    val corruptionChance = if (impair) corruptionPercent().coerceIn(0, 100) else 0
+                    if (outgoing.isNotEmpty() && corruptionChance > 0 && Random.nextInt(100) < corruptionChance) {
+                        outgoing = outgoing.copyOf()
+                        val index = Random.nextInt(outgoing.size)
+                        outgoing[index] = (outgoing[index].toInt() xor (1 shl Random.nextInt(8))).toByte()
+                    }
+                    enqueuePossiblyReordered(outgoing)
+
+                    val duplicateChance = if (impair) duplicationPercent().coerceIn(0, 100) else 0
+                    if (duplicateChance > 0 && Random.nextInt(100) < duplicateChance) {
+                        enqueuePossiblyReordered(outgoing.copyOf())
+                    }
+                }
+            } finally {
+                val pending = heldForReorder
+                heldForReorder = null
+                try {
+                    if (pending != null && isActive) queue.offer(pending)
+                } finally {
+                    queue.close()
+                }
+            }
         }
         var drainedNormally = false
         try {

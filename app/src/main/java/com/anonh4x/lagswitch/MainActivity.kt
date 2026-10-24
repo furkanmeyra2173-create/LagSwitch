@@ -32,7 +32,13 @@ class MainActivity : Activity() {
     private lateinit var testButton: Button
     private lateinit var testStatus: TextView
     private lateinit var delayLabel: TextView
+    private lateinit var downDelayLabel: TextView
+    private lateinit var jitterLabel: TextView
     private lateinit var lossLabel: TextView
+    private lateinit var burstLossLabel: TextView
+    private lateinit var duplicationLabel: TextView
+    private lateinit var corruptionLabel: TextView
+    private lateinit var reorderLabel: TextView
     private lateinit var bandwidthLabel: TextView
     private lateinit var sizeLabel: TextView
     private lateinit var onTimeLabel: TextView
@@ -77,6 +83,7 @@ class MainActivity : Activity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        ensureAdvancedDefaults()
         vpnActive = prefs.getBoolean(LagVpnService.KEY_VPN_ACTIVE, false)
         lagEnabled = vpnActive && prefs.getBoolean(LagVpnService.KEY_DELAY_ENABLED, false)
         statusMessage = prefs.getString(LagVpnService.KEY_STATUS, "Tünel kapalı") ?: "Tünel kapalı"
@@ -149,23 +156,87 @@ class MainActivity : Activity() {
             setTextColor(Color.rgb(0, 235, 170))
             setPadding(0, dp(20), 0, dp(5))
         }
-        delayLabel = label("Paket gecikmesi: ${prefs.getInt(LagVpnService.KEY_DELAY_MS, 1000)} ms")
+        delayLabel = label("Giden gecikme (Up delay): ${prefs.getInt(LagVpnService.KEY_UP_DELAY_MS, prefs.getInt(LagVpnService.KEY_DELAY_MS, 1000))} ms")
         val delaySeek = SeekBar(this).apply {
             max = 3000
-            progress = prefs.getInt(LagVpnService.KEY_DELAY_MS, 1000).coerceIn(0, 3000)
+            progress = prefs.getInt(LagVpnService.KEY_UP_DELAY_MS, prefs.getInt(LagVpnService.KEY_DELAY_MS, 1000)).coerceIn(0, 3000)
             setOnSeekBarChangeListener(seekListener { value ->
-                prefs.edit().putInt(LagVpnService.KEY_DELAY_MS, value).apply()
-                delayLabel.text = "Paket gecikmesi: $value ms"
+                val down = prefs.getInt(LagVpnService.KEY_DOWN_DELAY_MS, prefs.getInt(LagVpnService.KEY_DELAY_MS, 1000))
+                prefs.edit().putInt(LagVpnService.KEY_UP_DELAY_MS, value)
+                    .putInt(LagVpnService.KEY_DELAY_MS, maxOf(value, down)).apply()
+                delayLabel.text = "Giden gecikme (Up delay): $value ms"
+                publishNetworkConfig()
+            })
+        }
+        downDelayLabel = label("Gelen gecikme (Down delay): ${prefs.getInt(LagVpnService.KEY_DOWN_DELAY_MS, prefs.getInt(LagVpnService.KEY_DELAY_MS, 1000))} ms")
+        val downDelaySeek = SeekBar(this).apply {
+            max = 3000
+            progress = prefs.getInt(LagVpnService.KEY_DOWN_DELAY_MS, prefs.getInt(LagVpnService.KEY_DELAY_MS, 1000)).coerceIn(0, 3000)
+            setOnSeekBarChangeListener(seekListener { value ->
+                val up = prefs.getInt(LagVpnService.KEY_UP_DELAY_MS, prefs.getInt(LagVpnService.KEY_DELAY_MS, 1000))
+                prefs.edit().putInt(LagVpnService.KEY_DOWN_DELAY_MS, value)
+                    .putInt(LagVpnService.KEY_DELAY_MS, maxOf(value, up)).apply()
+                downDelayLabel.text = "Gelen gecikme (Down delay): $value ms"
+                publishNetworkConfig()
+            })
+        }
+        jitterLabel = label("Jitter (rastgele gecikme): ${prefs.getInt(LagVpnService.KEY_JITTER_MS, 0)} ms")
+        val jitterSeek = SeekBar(this).apply {
+            max = 1000
+            progress = prefs.getInt(LagVpnService.KEY_JITTER_MS, 0).coerceIn(0, 1000)
+            setOnSeekBarChangeListener(seekListener { value ->
+                prefs.edit().putInt(LagVpnService.KEY_JITTER_MS, value).apply()
+                jitterLabel.text = "Jitter (rastgele gecikme): $value ms"
                 publishNetworkConfig()
             })
         }
         lossLabel = label("UDP paket kaybı: ${prefs.getInt(LagVpnService.KEY_LOSS_PERCENT, 0)}%")
         val lossSeek = SeekBar(this).apply {
-            max = 50
-            progress = prefs.getInt(LagVpnService.KEY_LOSS_PERCENT, 0).coerceIn(0, 50)
+            max = 100
+            progress = prefs.getInt(LagVpnService.KEY_LOSS_PERCENT, 0).coerceIn(0, 100)
             setOnSeekBarChangeListener(seekListener { value ->
                 prefs.edit().putInt(LagVpnService.KEY_LOSS_PERCENT, value).apply()
                 lossLabel.text = "UDP paket kaybı: $value%"
+                publishNetworkConfig()
+            })
+        }
+        burstLossLabel = label("Burst paket kaybı olasılığı: ${prefs.getInt(LagVpnService.KEY_BURST_LOSS_PERCENT, 0)}%")
+        val burstLossSeek = SeekBar(this).apply {
+            max = 100
+            progress = prefs.getInt(LagVpnService.KEY_BURST_LOSS_PERCENT, 0).coerceIn(0, 100)
+            setOnSeekBarChangeListener(seekListener { value ->
+                prefs.edit().putInt(LagVpnService.KEY_BURST_LOSS_PERCENT, value).apply()
+                burstLossLabel.text = "Burst paket kaybı olasılığı: $value%"
+                publishNetworkConfig()
+            })
+        }
+        duplicationLabel = label("UDP paket çoğaltma: ${prefs.getInt(LagVpnService.KEY_DUPLICATION_PERCENT, 0)}%")
+        val duplicationSeek = SeekBar(this).apply {
+            max = 100
+            progress = prefs.getInt(LagVpnService.KEY_DUPLICATION_PERCENT, 0).coerceIn(0, 100)
+            setOnSeekBarChangeListener(seekListener { value ->
+                prefs.edit().putInt(LagVpnService.KEY_DUPLICATION_PERCENT, value).apply()
+                duplicationLabel.text = "UDP paket çoğaltma: $value%"
+                publishNetworkConfig()
+            })
+        }
+        corruptionLabel = label("UDP paket bozma: ${prefs.getInt(LagVpnService.KEY_CORRUPTION_PERCENT, 0)}%")
+        val corruptionSeek = SeekBar(this).apply {
+            max = 100
+            progress = prefs.getInt(LagVpnService.KEY_CORRUPTION_PERCENT, 0).coerceIn(0, 100)
+            setOnSeekBarChangeListener(seekListener { value ->
+                prefs.edit().putInt(LagVpnService.KEY_CORRUPTION_PERCENT, value).apply()
+                corruptionLabel.text = "UDP paket bozma: $value%"
+                publishNetworkConfig()
+            })
+        }
+        reorderLabel = label("UDP paket sırasını değiştirme: ${prefs.getInt(LagVpnService.KEY_REORDER_PERCENT, 0)}%")
+        val reorderSeek = SeekBar(this).apply {
+            max = 100
+            progress = prefs.getInt(LagVpnService.KEY_REORDER_PERCENT, 0).coerceIn(0, 100)
+            setOnSeekBarChangeListener(seekListener { value ->
+                prefs.edit().putInt(LagVpnService.KEY_REORDER_PERCENT, value).apply()
+                reorderLabel.text = "UDP paket sırasını değiştirme: $value%"
                 publishNetworkConfig()
             })
         }
@@ -226,7 +297,7 @@ class MainActivity : Activity() {
             })
         }
         val info = TextView(this).apply {
-            text = "Gecikme 0–3000 ms, UDP paket kaybı %0–50 ve bant genişliği sınırsız veya 50–10000 kbit/sn olarak ayarlanabilir. Kayıp simülasyonu yalnızca UDP datagramlarında uygulanır; TCP akışından veri silinmez. Ayarlar yalnızca LAG AÇIK durumunda etkilidir. Çok yüksek gecikme veya kayıp oyunun bağlantısını kesebilir."
+            text = "Giden/gelen gecikme ve jitter ayrı ayarlanır. UDP için kayıp, burst kaybı, çoğaltma, bozma ve sıralama değişimi simüle edilebilir; TCP akışındaki baytlar silinmez veya sıralanmaz. Ayarlar yalnızca LAG AÇIK durumunda etkilidir. Yüksek kayıp/bozma oyunun bağlantısını kesebilir."
             textSize = 12f
             setTextColor(Color.rgb(150, 161, 178))
             setPadding(0, dp(14), 0, 0)
@@ -242,8 +313,20 @@ class MainActivity : Activity() {
         root.addView(settingsTitle, ViewGroup.LayoutParams(-1, -2))
         root.addView(delayLabel, ViewGroup.LayoutParams(-1, -2))
         root.addView(delaySeek, ViewGroup.LayoutParams(-1, -2))
+        root.addView(downDelayLabel, ViewGroup.LayoutParams(-1, -2))
+        root.addView(downDelaySeek, ViewGroup.LayoutParams(-1, -2))
+        root.addView(jitterLabel, ViewGroup.LayoutParams(-1, -2))
+        root.addView(jitterSeek, ViewGroup.LayoutParams(-1, -2))
         root.addView(lossLabel, ViewGroup.LayoutParams(-1, -2))
         root.addView(lossSeek, ViewGroup.LayoutParams(-1, -2))
+        root.addView(burstLossLabel, ViewGroup.LayoutParams(-1, -2))
+        root.addView(burstLossSeek, ViewGroup.LayoutParams(-1, -2))
+        root.addView(duplicationLabel, ViewGroup.LayoutParams(-1, -2))
+        root.addView(duplicationSeek, ViewGroup.LayoutParams(-1, -2))
+        root.addView(corruptionLabel, ViewGroup.LayoutParams(-1, -2))
+        root.addView(corruptionSeek, ViewGroup.LayoutParams(-1, -2))
+        root.addView(reorderLabel, ViewGroup.LayoutParams(-1, -2))
+        root.addView(reorderSeek, ViewGroup.LayoutParams(-1, -2))
         root.addView(bandwidthLabel, ViewGroup.LayoutParams(-1, -2))
         root.addView(bandwidthSeek, ViewGroup.LayoutParams(-1, -2))
         root.addView(sizeLabel, ViewGroup.LayoutParams(-1, -2))
@@ -253,6 +336,14 @@ class MainActivity : Activity() {
         root.addView(onSeek, ViewGroup.LayoutParams(-1, -2))
         root.addView(offTimeLabel, ViewGroup.LayoutParams(-1, -2))
         root.addView(offSeek, ViewGroup.LayoutParams(-1, -2))
+        root.addView(Button(this).apply {
+            text = "AĞ PROFİLİNİ KAYDET"
+            setOnClickListener { savePreset() }
+        }, ViewGroup.LayoutParams(-1, -2))
+        root.addView(Button(this).apply {
+            text = "KAYITLI PROFİLİ YÜKLE"
+            setOnClickListener { loadPreset() }
+        }, ViewGroup.LayoutParams(-1, -2))
         root.addView(info, ViewGroup.LayoutParams(-1, -2))
 
         val appTitle = TextView(this).apply {
@@ -333,15 +424,103 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun ensureAdvancedDefaults() {
+        val legacyDelay = prefs.getInt(LagVpnService.KEY_DELAY_MS, 1000).coerceIn(0, 3000)
+        val edit = prefs.edit()
+        if (!prefs.contains(LagVpnService.KEY_UP_DELAY_MS)) edit.putInt(LagVpnService.KEY_UP_DELAY_MS, legacyDelay)
+        if (!prefs.contains(LagVpnService.KEY_DOWN_DELAY_MS)) edit.putInt(LagVpnService.KEY_DOWN_DELAY_MS, legacyDelay)
+        if (!prefs.contains(LagVpnService.KEY_JITTER_MS)) edit.putInt(LagVpnService.KEY_JITTER_MS, 0)
+        if (!prefs.contains(LagVpnService.KEY_BURST_LOSS_PERCENT)) edit.putInt(LagVpnService.KEY_BURST_LOSS_PERCENT, 0)
+        if (!prefs.contains(LagVpnService.KEY_DUPLICATION_PERCENT)) edit.putInt(LagVpnService.KEY_DUPLICATION_PERCENT, 0)
+        if (!prefs.contains(LagVpnService.KEY_CORRUPTION_PERCENT)) edit.putInt(LagVpnService.KEY_CORRUPTION_PERCENT, 0)
+        if (!prefs.contains(LagVpnService.KEY_REORDER_PERCENT)) edit.putInt(LagVpnService.KEY_REORDER_PERCENT, 0)
+        edit.apply()
+    }
+
     private fun publishNetworkConfig() {
         if (!vpnActive) return
+        val up = prefs.getInt(LagVpnService.KEY_UP_DELAY_MS, prefs.getInt(LagVpnService.KEY_DELAY_MS, 1000))
+        val down = prefs.getInt(LagVpnService.KEY_DOWN_DELAY_MS, prefs.getInt(LagVpnService.KEY_DELAY_MS, 1000))
         startService(
             Intent(this, LagVpnService::class.java)
                 .setAction(LagVpnService.ACTION_CONFIG_CHANGED)
-                .putExtra(LagVpnService.EXTRA_CONFIG_DELAY_MS, prefs.getInt(LagVpnService.KEY_DELAY_MS, 1000))
+                .putExtra(LagVpnService.EXTRA_CONFIG_DELAY_MS, maxOf(up, down))
+                .putExtra(LagVpnService.EXTRA_CONFIG_UP_DELAY_MS, up)
+                .putExtra(LagVpnService.EXTRA_CONFIG_DOWN_DELAY_MS, down)
+                .putExtra(LagVpnService.EXTRA_CONFIG_JITTER_MS, prefs.getInt(LagVpnService.KEY_JITTER_MS, 0))
                 .putExtra(LagVpnService.EXTRA_CONFIG_LOSS_PERCENT, prefs.getInt(LagVpnService.KEY_LOSS_PERCENT, 0))
+                .putExtra(LagVpnService.EXTRA_CONFIG_BURST_LOSS_PERCENT, prefs.getInt(LagVpnService.KEY_BURST_LOSS_PERCENT, 0))
+                .putExtra(LagVpnService.EXTRA_CONFIG_DUPLICATION_PERCENT, prefs.getInt(LagVpnService.KEY_DUPLICATION_PERCENT, 0))
+                .putExtra(LagVpnService.EXTRA_CONFIG_CORRUPTION_PERCENT, prefs.getInt(LagVpnService.KEY_CORRUPTION_PERCENT, 0))
+                .putExtra(LagVpnService.EXTRA_CONFIG_REORDER_PERCENT, prefs.getInt(LagVpnService.KEY_REORDER_PERCENT, 0))
                 .putExtra(LagVpnService.EXTRA_CONFIG_BANDWIDTH_KBPS, prefs.getInt(LagVpnService.KEY_BANDWIDTH_KBPS, 0))
         )
+    }
+
+    private fun presetKeysAndDefaults(): List<Pair<String, Int>> = listOf(
+        LagVpnService.KEY_UP_DELAY_MS to 1000,
+        LagVpnService.KEY_DOWN_DELAY_MS to 1000,
+        LagVpnService.KEY_JITTER_MS to 0,
+        LagVpnService.KEY_LOSS_PERCENT to 0,
+        LagVpnService.KEY_BURST_LOSS_PERCENT to 0,
+        LagVpnService.KEY_DUPLICATION_PERCENT to 0,
+        LagVpnService.KEY_CORRUPTION_PERCENT to 0,
+        LagVpnService.KEY_REORDER_PERCENT to 0,
+        LagVpnService.KEY_BANDWIDTH_KBPS to 0
+    )
+
+    private fun savePreset() {
+        val nameInput = android.widget.EditText(this).apply { hint = "Örn. Zayıf 4G bağlantısı" }
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Ağ profilini kaydet")
+            .setMessage("Mevcut gecikme ve paket ayarları kaydedilecek.")
+            .setView(nameInput)
+            .setPositiveButton("Kaydet") { _, _ ->
+                val name = nameInput.text.toString().trim()
+                if (name.isEmpty()) {
+                    android.widget.Toast.makeText(this, "Profil adı boş olamaz.", android.widget.Toast.LENGTH_SHORT).show()
+                    return@setPositiveButton
+                }
+                val presets = runCatching {
+                    org.json.JSONObject(prefs.getString(KEY_CUSTOM_PRESETS, "{}") ?: "{}")
+                }.getOrElse { org.json.JSONObject() }
+                val config = org.json.JSONObject()
+                presetKeysAndDefaults().forEach { (key, default) -> config.put(key, prefs.getInt(key, default)) }
+                presets.put(name, config)
+                prefs.edit().putString(KEY_CUSTOM_PRESETS, presets.toString()).apply()
+                android.widget.Toast.makeText(this, "Profil kaydedildi: $name", android.widget.Toast.LENGTH_SHORT).show()
+            }
+            .setNegativeButton("İptal", null)
+            .show()
+    }
+
+    private fun loadPreset() {
+        val presets = runCatching {
+            org.json.JSONObject(prefs.getString(KEY_CUSTOM_PRESETS, "{}") ?: "{}")
+        }.getOrElse { org.json.JSONObject() }
+        val names = mutableListOf<String>()
+        val keys = presets.keys()
+        while (keys.hasNext()) names.add(keys.next())
+        if (names.isEmpty()) {
+            android.widget.Toast.makeText(this, "Önce bir ağ profili kaydet.", android.widget.Toast.LENGTH_SHORT).show()
+            return
+        }
+        android.app.AlertDialog.Builder(this)
+            .setTitle("Ağ profili seç")
+            .setItems(names.toTypedArray()) { _, which ->
+                val config = presets.optJSONObject(names[which]) ?: return@setItems
+                val edit = prefs.edit()
+                presetKeysAndDefaults().forEach { (key, default) ->
+                    edit.putInt(key, config.optInt(key, default))
+                }
+                val up = config.optInt(LagVpnService.KEY_UP_DELAY_MS, 1000)
+                val down = config.optInt(LagVpnService.KEY_DOWN_DELAY_MS, 1000)
+                edit.putInt(LagVpnService.KEY_DELAY_MS, maxOf(up, down)).apply()
+                publishNetworkConfig()
+                recreate()
+            }
+            .setNegativeButton("İptal", null)
+            .show()
     }
 
     private fun applySelectedApps() {
@@ -503,6 +682,7 @@ class MainActivity : Activity() {
     }
 
     companion object {
+        private const val KEY_CUSTOM_PRESETS = "custom_network_presets"
         private const val KEY_BUTTON_SIZE = "button_size_dp"
         private const val KEY_AUTO_CYCLE = "auto_cycle"
         private const val KEY_ON_SECONDS = "on_seconds"

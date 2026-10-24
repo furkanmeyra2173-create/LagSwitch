@@ -18,6 +18,8 @@ import android.view.WindowManager
 import android.widget.TextView
 import android.net.VpnService
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import kotlinx.coroutines.CoroutineScope
@@ -39,7 +41,14 @@ class LagVpnService : VpnService() {
         private set
     @Volatile private var starting = false
     @Volatile private var configuredDelayMs = 1000
+    @Volatile private var configuredUploadDelayMs = 1000
+    @Volatile private var configuredDownloadDelayMs = 1000
+    @Volatile private var configuredJitterMs = 0
     @Volatile private var configuredLossPercent = 0
+    @Volatile private var configuredBurstLossPercent = 0
+    @Volatile private var configuredDuplicationPercent = 0
+    @Volatile private var configuredCorruptionPercent = 0
+    @Volatile private var configuredReorderPercent = 0
     @Volatile private var configuredBandwidthKbps = 0
     private val restartInProgress = AtomicBoolean(false)
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -94,15 +103,29 @@ class LagVpnService : VpnService() {
     private fun loadRuntimeConfig() {
         val p = getSharedPreferences(PREFS, MODE_PRIVATE)
         configuredDelayMs = p.getInt(KEY_DELAY_MS, 1000).coerceIn(0, 3000)
-        configuredLossPercent = p.getInt(KEY_LOSS_PERCENT, 0).coerceIn(0, 50)
+        configuredUploadDelayMs = p.getInt(KEY_UP_DELAY_MS, configuredDelayMs).coerceIn(0, 3000)
+        configuredDownloadDelayMs = p.getInt(KEY_DOWN_DELAY_MS, configuredDelayMs).coerceIn(0, 3000)
+        configuredJitterMs = p.getInt(KEY_JITTER_MS, 0).coerceIn(0, 1000)
+        configuredLossPercent = p.getInt(KEY_LOSS_PERCENT, 0).coerceIn(0, 100)
+        configuredBurstLossPercent = p.getInt(KEY_BURST_LOSS_PERCENT, 0).coerceIn(0, 100)
+        configuredDuplicationPercent = p.getInt(KEY_DUPLICATION_PERCENT, 0).coerceIn(0, 100)
+        configuredCorruptionPercent = p.getInt(KEY_CORRUPTION_PERCENT, 0).coerceIn(0, 100)
+        configuredReorderPercent = p.getInt(KEY_REORDER_PERCENT, 0).coerceIn(0, 100)
         configuredBandwidthKbps = p.getInt(KEY_BANDWIDTH_KBPS, 0).coerceIn(0, 10_000)
     }
 
     private fun updateRuntimeConfig(intent: Intent) {
         configuredDelayMs = intent.getIntExtra(EXTRA_CONFIG_DELAY_MS, configuredDelayMs).coerceIn(0, 3000)
-        configuredLossPercent = intent.getIntExtra(EXTRA_CONFIG_LOSS_PERCENT, configuredLossPercent).coerceIn(0, 50)
+        configuredUploadDelayMs = intent.getIntExtra(EXTRA_CONFIG_UP_DELAY_MS, configuredUploadDelayMs).coerceIn(0, 3000)
+        configuredDownloadDelayMs = intent.getIntExtra(EXTRA_CONFIG_DOWN_DELAY_MS, configuredDownloadDelayMs).coerceIn(0, 3000)
+        configuredJitterMs = intent.getIntExtra(EXTRA_CONFIG_JITTER_MS, configuredJitterMs).coerceIn(0, 1000)
+        configuredLossPercent = intent.getIntExtra(EXTRA_CONFIG_LOSS_PERCENT, configuredLossPercent).coerceIn(0, 100)
+        configuredBurstLossPercent = intent.getIntExtra(EXTRA_CONFIG_BURST_LOSS_PERCENT, configuredBurstLossPercent).coerceIn(0, 100)
+        configuredDuplicationPercent = intent.getIntExtra(EXTRA_CONFIG_DUPLICATION_PERCENT, configuredDuplicationPercent).coerceIn(0, 100)
+        configuredCorruptionPercent = intent.getIntExtra(EXTRA_CONFIG_CORRUPTION_PERCENT, configuredCorruptionPercent).coerceIn(0, 100)
+        configuredReorderPercent = intent.getIntExtra(EXTRA_CONFIG_REORDER_PERCENT, configuredReorderPercent).coerceIn(0, 100)
         configuredBandwidthKbps = intent.getIntExtra(EXTRA_CONFIG_BANDWIDTH_KBPS, configuredBandwidthKbps).coerceIn(0, 10_000)
-        Log.i(TAG, "Network config updated: delay=${configuredDelayMs}ms loss=${configuredLossPercent}% bandwidth=${configuredBandwidthKbps}kbps")
+        Log.i(TAG, "Network config updated: up=${configuredUploadDelayMs}ms down=${configuredDownloadDelayMs}ms jitter=${configuredJitterMs}ms loss=${configuredLossPercent}% bandwidth=${configuredBandwidthKbps}kbps")
         runCatching { refreshNotification() }
     }
 
@@ -121,12 +144,17 @@ class LagVpnService : VpnService() {
         try {
             val pfd = buildTun()
             val fd = pfd.detachFd()
-            val networkPrefs = getSharedPreferences(PREFS, MODE_PRIVATE)
             val newEngine = NetstackEngine(
                 this@LagVpnService,
                 { lagEnabled },
-                { configuredDelayMs.toLong() },
+                { configuredUploadDelayMs.toLong() },
+                { configuredDownloadDelayMs.toLong() },
+                { configuredJitterMs.toLong() },
                 { configuredLossPercent },
+                { configuredBurstLossPercent },
+                { configuredDuplicationPercent },
+                { configuredCorruptionPercent },
+                { configuredReorderPercent },
                 { configuredBandwidthKbps },
             )
             try { newEngine.start(fd) }
@@ -253,6 +281,17 @@ class LagVpnService : VpnService() {
         var startX = 0
         var startY = 0
         var dragged = false
+        var longPressTriggered = false
+        val overlayHandler = Handler(Looper.getMainLooper())
+        val openSettings = Runnable {
+            longPressTriggered = true
+            runCatching {
+                startActivity(
+                    Intent(this@LagVpnService, MainActivity::class.java)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                )
+            }.onFailure { Log.w(TAG, "Could not open advanced settings from floating button", it) }
+        }
         button.setOnTouchListener { view, event ->
             when (event.action) {
                 MotionEvent.ACTION_DOWN -> {
@@ -261,12 +300,18 @@ class LagVpnService : VpnService() {
                     startX = params.x
                     startY = params.y
                     dragged = false
+                    longPressTriggered = false
+                    overlayHandler.removeCallbacks(openSettings)
+                    overlayHandler.postDelayed(openSettings, 650L)
                     true
                 }
                 MotionEvent.ACTION_MOVE -> {
                     val dx = (event.rawX - downX).toInt()
                     val dy = (event.rawY - downY).toInt()
-                    if (kotlin.math.abs(dx) > 6 || kotlin.math.abs(dy) > 6) dragged = true
+                    if (kotlin.math.abs(dx) > 6 || kotlin.math.abs(dy) > 6) {
+                        dragged = true
+                        overlayHandler.removeCallbacks(openSettings)
+                    }
                     if (dragged) {
                         params.x = startX + dx
                         params.y = startY + dy
@@ -275,14 +320,19 @@ class LagVpnService : VpnService() {
                     true
                 }
                 MotionEvent.ACTION_UP -> {
-                    if (!dragged) {
+                    overlayHandler.removeCallbacks(openSettings)
+                    if (!dragged && !longPressTriggered) {
                         view.performClick()
-                    } else {
+                    } else if (dragged) {
                         params.x = params.x.coerceIn(0, (resources.displayMetrics.widthPixels - widthPx).coerceAtLeast(0))
                         params.y = params.y.coerceIn(0, (resources.displayMetrics.heightPixels - sizePx).coerceAtLeast(0))
                         runCatching { windowManager?.updateViewLayout(view, params) }
                         saveFloatingPosition()
                     }
+                    true
+                }
+                MotionEvent.ACTION_CANCEL -> {
+                    overlayHandler.removeCallbacks(openSettings)
                     true
                 }
                 else -> true
@@ -397,7 +447,7 @@ class LagVpnService : VpnService() {
         val notification = Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_upload_done)
             .setContentTitle("ANONH4X LagSwitch")
-            .setContentText(if (lagEnabled) "Seçili uygulamalar: " + configuredDelayMs + " ms gecikme" else "VPN açık, gecikme kapalı")
+            .setContentText(if (lagEnabled) "Giden ${configuredUploadDelayMs} ms / Gelen ${configuredDownloadDelayMs} ms" else "VPN açık, gecikme kapalı")
             .setOngoing(true).build()
         getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification)
     }
@@ -435,7 +485,14 @@ class LagVpnService : VpnService() {
         const val ACTION_CONFIG_CHANGED = "com.anonh4x.lagswitch.CONFIG_CHANGED"
         const val ACTION_STATE = "com.anonh4x.lagswitch.STATE"
         const val EXTRA_CONFIG_DELAY_MS = "config_delay_ms"
+        const val EXTRA_CONFIG_UP_DELAY_MS = "config_up_delay_ms"
+        const val EXTRA_CONFIG_DOWN_DELAY_MS = "config_down_delay_ms"
+        const val EXTRA_CONFIG_JITTER_MS = "config_jitter_ms"
         const val EXTRA_CONFIG_LOSS_PERCENT = "config_loss_percent"
+        const val EXTRA_CONFIG_BURST_LOSS_PERCENT = "config_burst_loss_percent"
+        const val EXTRA_CONFIG_DUPLICATION_PERCENT = "config_duplication_percent"
+        const val EXTRA_CONFIG_CORRUPTION_PERCENT = "config_corruption_percent"
+        const val EXTRA_CONFIG_REORDER_PERCENT = "config_reorder_percent"
         const val EXTRA_CONFIG_BANDWIDTH_KBPS = "config_bandwidth_kbps"
         const val EXTRA_DELAY_ENABLED = "delay_enabled"
         const val EXTRA_VPN_ACTIVE = "vpn_active"
@@ -445,7 +502,14 @@ class LagVpnService : VpnService() {
         const val KEY_DELAY_ENABLED = "delay_enabled"
         const val KEY_STATUS = "status_text"
         const val KEY_DELAY_MS = "delay_ms"
+        const val KEY_UP_DELAY_MS = "up_delay_ms"
+        const val KEY_DOWN_DELAY_MS = "down_delay_ms"
+        const val KEY_JITTER_MS = "jitter_ms"
         const val KEY_LOSS_PERCENT = "loss_percent"
+        const val KEY_BURST_LOSS_PERCENT = "burst_loss_percent"
+        const val KEY_DUPLICATION_PERCENT = "duplication_percent"
+        const val KEY_CORRUPTION_PERCENT = "corruption_percent"
+        const val KEY_REORDER_PERCENT = "reorder_percent"
         const val KEY_BANDWIDTH_KBPS = "bandwidth_kbps"
         private const val KEY_LAST_SERVICE_CRASH = "last_service_crash"
         private const val KEY_LAST_SERVICE_CRASH_AT = "last_service_crash_at"
