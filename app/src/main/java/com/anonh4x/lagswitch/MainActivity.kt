@@ -448,8 +448,12 @@ class MainActivity : Activity() {
         status.text = "DURUM: $statusMessage"
         toggle.text = if (lagEnabled) "LAG SWITCH  •  KAPAT" else "LAG SWITCH  •  AÇ"
         toggle.setBackgroundColor(if (lagEnabled) Color.rgb(180, 58, 66) else Color.rgb(0, 160, 115))
-        disconnect.isEnabled = vpnActive
-        testButton.isEnabled = vpnActive && !testRunning
+        val changingNetwork = statusMessage.contains("kuruluyor", ignoreCase = true) ||
+            statusMessage.contains("değiştiriliyor", ignoreCase = true) ||
+            statusMessage.contains("uygulanıyor", ignoreCase = true)
+        toggle.isEnabled = !changingNetwork
+        disconnect.isEnabled = vpnActive && !changingNetwork
+        testButton.isEnabled = vpnActive && !testRunning && !changingNetwork
     }
 
     private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
