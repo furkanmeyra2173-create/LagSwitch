@@ -15,6 +15,11 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+      - name: Restore stable debug signing key
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: lagswitch-debug-keystore-v1
       - name: Configure preinstalled Android SDK
         run: |
           SDK="/usr/local/lib/android/sdk"
