@@ -105,13 +105,17 @@ class LagVpnService : VpnService() {
             .getStringSet(KEY_SELECTED_APPS, setOf(OXIDE_PACKAGE))
             ?.toSet()
             .orEmpty()
-        (selectedPackages + packageName).forEach { selectedPackage ->
+        // When Fake Lag is OFF, let selected games use Android's normal network.
+        // Only route selected packages through the custom netstack while delay is ON.
+        val packagesToRoute = if (lagEnabled) selectedPackages else emptySet()
+        (packagesToRoute + packageName).forEach { selectedPackage ->
             try {
                 builder.addAllowedApplication(selectedPackage)
             } catch (e: PackageManager.NameNotFoundException) {
                 Log.w(TAG, "Selected app is no longer installed: " + selectedPackage, e)
             }
         }
+        Log.i(TAG, "VPN routing mode: delayEnabled=${lagEnabled}; routedPackages=${(packagesToRoute + packageName).joinToString()}")
         builder.setBlocking(true)
         return builder.establish() ?: throw IOException("Android VPN tünelini kuramadı veya izin geri alındı.")
     }
@@ -122,13 +126,14 @@ class LagVpnService : VpnService() {
             if (!starting) { enterForeground(); beginStart() }
             return
         }
+        if (lagEnabled == enabled) return
+
+        // The app allow-list is part of Android's established VPN interface. Rebuild the
+        // tunnel when toggling so OFF really bypasses the selected apps, rather than merely
+        // removing queue delay while still forcing all their traffic through the relay.
         lagEnabled = enabled
-        val configuredDelay = getSharedPreferences(PREFS, MODE_PRIVATE).getInt(KEY_DELAY_MS, 1000).coerceIn(0, 3000)
-        val message = if (enabled) "VPN açık • gecikme AÇIK (" + configuredDelay + " ms/yön)" else "VPN açık • gecikme KAPALI"
-        publishState(true, enabled, message)
-        updateFloatingButton()
-        refreshNotification()
-        Log.i(TAG, "delayEnabled=$enabled")
+        Log.i(TAG, "Fake Lag changed to $enabled; rebuilding VPN package routes")
+        requestRestart()
     }
 
     private fun showFloatingButton() {
