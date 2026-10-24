@@ -38,11 +38,33 @@ class LagVpnService : VpnService() {
     @Volatile internal var lagEnabled = false
         private set
     @Volatile private var starting = false
+    @Volatile private var configuredDelayMs = 1000
+    @Volatile private var configuredLossPercent = 0
+    @Volatile private var configuredBandwidthKbps = 0
     private val restartInProgress = AtomicBoolean(false)
     private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private var windowManager: WindowManager? = null
     private var floatingButton: TextView? = null
     private var floatingParams: WindowManager.LayoutParams? = null
+
+    override fun onCreate() {
+        super.onCreate()
+        // Keep a Java crash in the VPN process diagnosable without taking down the UI process.
+        val previousHandler = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, error ->
+            Log.e(TAG, "Uncaught exception in VPN process (${thread.name})", error)
+            runCatching {
+                getSharedPreferences(PREFS, MODE_PRIVATE).edit()
+                    .putString(KEY_LAST_SERVICE_CRASH, Log.getStackTraceString(error).take(12_000))
+                    .putLong(KEY_LAST_SERVICE_CRASH_AT, System.currentTimeMillis())
+                    .apply()
+            }
+            if (previousHandler != null) previousHandler.uncaughtException(thread, error)
+            else android.os.Process.killProcess(android.os.Process.myPid())
+        }
+        loadRuntimeConfig()
+        Log.i(TAG, "VPN service process created")
+    }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
@@ -50,6 +72,7 @@ class LagVpnService : VpnService() {
             ACTION_RESTART -> requestRestart()
             ACTION_RESIZE_OVERLAY -> serviceScope.launch { withContext(Dispatchers.Main) { hideFloatingButton(); showFloatingButton() } }
             ACTION_SET_DELAY -> setDelay(intent.getBooleanExtra(EXTRA_DELAY_ENABLED, false))
+            ACTION_CONFIG_CHANGED -> updateRuntimeConfig(intent)
             ACTION_START, null -> {
                 if (restartInProgress.get()) {
                     Log.i(TAG, "Ignoring start while VPN routes are being rebuilt")
@@ -63,7 +86,24 @@ class LagVpnService : VpnService() {
             }
             else -> beginStart()
         }
-        return START_NOT_STICKY
+        // A foreground VPN service should recover after its dedicated process is reclaimed.
+        // A null-intent restart comes up with Fake Lag OFF; the user can safely re-enable it.
+        return START_STICKY
+    }
+
+    private fun loadRuntimeConfig() {
+        val p = getSharedPreferences(PREFS, MODE_PRIVATE)
+        configuredDelayMs = p.getInt(KEY_DELAY_MS, 1000).coerceIn(0, 3000)
+        configuredLossPercent = p.getInt(KEY_LOSS_PERCENT, 0).coerceIn(0, 50)
+        configuredBandwidthKbps = p.getInt(KEY_BANDWIDTH_KBPS, 0).coerceIn(0, 10_000)
+    }
+
+    private fun updateRuntimeConfig(intent: Intent) {
+        configuredDelayMs = intent.getIntExtra(EXTRA_CONFIG_DELAY_MS, configuredDelayMs).coerceIn(0, 3000)
+        configuredLossPercent = intent.getIntExtra(EXTRA_CONFIG_LOSS_PERCENT, configuredLossPercent).coerceIn(0, 50)
+        configuredBandwidthKbps = intent.getIntExtra(EXTRA_CONFIG_BANDWIDTH_KBPS, configuredBandwidthKbps).coerceIn(0, 10_000)
+        Log.i(TAG, "Network config updated: delay=${configuredDelayMs}ms loss=${configuredLossPercent}% bandwidth=${configuredBandwidthKbps}kbps")
+        runCatching { refreshNotification() }
     }
 
     private fun beginStart() {
@@ -85,9 +125,9 @@ class LagVpnService : VpnService() {
             val newEngine = NetstackEngine(
                 this@LagVpnService,
                 { lagEnabled },
-                { networkPrefs.getInt(KEY_DELAY_MS, 1000).toLong() },
-                { networkPrefs.getInt(KEY_LOSS_PERCENT, 0).coerceIn(0, 50) },
-                { networkPrefs.getInt(KEY_BANDWIDTH_KBPS, 0).coerceIn(0, 10_000) },
+                { configuredDelayMs.toLong() },
+                { configuredLossPercent },
+                { configuredBandwidthKbps },
             )
             try { newEngine.start(fd) }
             catch (t: Throwable) {
@@ -357,7 +397,7 @@ class LagVpnService : VpnService() {
         val notification = Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.stat_sys_upload_done)
             .setContentTitle("ANONH4X LagSwitch")
-            .setContentText(if (lagEnabled) "Seçili uygulamalar: " + getSharedPreferences(PREFS, MODE_PRIVATE).getInt(KEY_DELAY_MS, 1000) + " ms gecikme" else "VPN açık, gecikme kapalı")
+            .setContentText(if (lagEnabled) "Seçili uygulamalar: " + configuredDelayMs + " ms gecikme" else "VPN açık, gecikme kapalı")
             .setOngoing(true).build()
         getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification)
     }
@@ -392,7 +432,11 @@ class LagVpnService : VpnService() {
         const val ACTION_SET_DELAY = "com.anonh4x.lagswitch.SET_DELAY"
         const val ACTION_RESTART = "com.anonh4x.lagswitch.RESTART"
         const val ACTION_RESIZE_OVERLAY = "com.anonh4x.lagswitch.RESIZE_OVERLAY"
+        const val ACTION_CONFIG_CHANGED = "com.anonh4x.lagswitch.CONFIG_CHANGED"
         const val ACTION_STATE = "com.anonh4x.lagswitch.STATE"
+        const val EXTRA_CONFIG_DELAY_MS = "config_delay_ms"
+        const val EXTRA_CONFIG_LOSS_PERCENT = "config_loss_percent"
+        const val EXTRA_CONFIG_BANDWIDTH_KBPS = "config_bandwidth_kbps"
         const val EXTRA_DELAY_ENABLED = "delay_enabled"
         const val EXTRA_VPN_ACTIVE = "vpn_active"
         const val EXTRA_STATUS = "status_text"
@@ -403,6 +447,8 @@ class LagVpnService : VpnService() {
         const val KEY_DELAY_MS = "delay_ms"
         const val KEY_LOSS_PERCENT = "loss_percent"
         const val KEY_BANDWIDTH_KBPS = "bandwidth_kbps"
+        private const val KEY_LAST_SERVICE_CRASH = "last_service_crash"
+        private const val KEY_LAST_SERVICE_CRASH_AT = "last_service_crash_at"
         private const val KEY_FLOATING_X = "floating_button_x"
         private const val KEY_FLOATING_Y = "floating_button_y"
         private const val KEY_SELECTED_APPS = "selected_apps"

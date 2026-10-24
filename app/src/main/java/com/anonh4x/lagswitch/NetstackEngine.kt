@@ -28,6 +28,7 @@ import java.net.InetSocketAddress
 import java.net.Socket
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 
 /** gVisor translates TUN packets into flows; protected sockets relay them upstream. */
 internal class NetstackEngine(
@@ -41,6 +42,7 @@ internal class NetstackEngine(
     private val uploadLimiter = BandwidthLimiter()
     private val downloadLimiter = BandwidthLimiter()
     private val stopped = AtomicBoolean(false)
+    private val activeFlows = AtomicInteger(0)
     private val closeActions = ConcurrentHashMap.newKeySet<() -> Unit>()
     @Volatile private var tunnel: Tunnel? = null
 
@@ -78,13 +80,23 @@ internal class NetstackEngine(
 
     private fun launchFlow(label: String, closeOnReject: () -> Unit, block: suspend () -> Unit) {
         if (stopped.get()) { closeOnReject(); return }
+        val count = activeFlows.incrementAndGet()
+        if (count > MAX_ACTIVE_FLOWS) {
+            activeFlows.decrementAndGet()
+            closeOnReject()
+            Log.w(TAG, "Rejecting ${label}: active-flow safety limit reached")
+            return
+        }
         val flow = scope.launch {
             try { block() }
             catch (t: Throwable) {
                 if (t !is CancellationException && !stopped.get()) Log.w(TAG, "${label} failed: ${t.message}")
             }
         }
-        flow.invokeOnCompletion { cause -> if (cause != null || stopped.get()) runCatching { closeOnReject() } }
+        flow.invokeOnCompletion { cause ->
+            activeFlows.decrementAndGet()
+            if (cause != null || stopped.get()) runCatching { closeOnReject() }
+        }
     }
 
     private suspend fun relayTcp(dstIp: String, dstPort: Int, appSide: TCPConn, label: String) {
@@ -149,6 +161,8 @@ internal class NetstackEngine(
             if (!vpnService.protect(socket)) throw IOException("VpnService.protect(DatagramSocket) failed")
             socket.connect(InetSocketAddress(InetAddress.getByName(dstIp), dstPort))
             val bypassDelay = dstPort == 53 || dstPort == 853
+            val receiveBuffer = ByteArray(MAX_UDP_PAYLOAD)
+            val receivePacket = DatagramPacket(receiveBuffer, receiveBuffer.size)
             coroutineScope {
                 val upload = launch(Dispatchers.IO) {
                     try {
@@ -165,10 +179,9 @@ internal class NetstackEngine(
                     try {
                         pipeDatagrams(
                             read = {
-                                val buffer = ByteArray(MAX_UDP_PAYLOAD)
-                                val packet = DatagramPacket(buffer, buffer.size)
-                                socket.receive(packet)
-                                buffer.copyOf(packet.length)
+                                receivePacket.length = receiveBuffer.size
+                                socket.receive(receivePacket)
+                                receiveBuffer.copyOf(receivePacket.length)
                             },
                             write = { bytes -> appSide.send(bytes) },
                             delayTraffic = !bypassDelay, limiter = downloadLimiter,
@@ -232,7 +245,7 @@ internal class NetstackEngine(
                     // UDP datagrams can be discarded safely; never remove bytes from a TCP stream.
                     val loss = if (delayTraffic && delayEnabled()) lossPercent().coerceIn(0, 50) else 0
                     if (loss > 0 && Random.nextInt(100) < loss) continue
-                    queue.offer(packet.copyOf())
+                    queue.offer(packet)
                 }
             } finally { queue.close() }
         }
@@ -283,5 +296,6 @@ internal class NetstackEngine(
         private const val TCP_QUEUE_ITEMS = 16
         private const val UDP_QUEUE_ITEMS = 8
         private const val MAX_UDP_PAYLOAD = 65_535
+        private const val MAX_ACTIVE_FLOWS = 256
     }
 }

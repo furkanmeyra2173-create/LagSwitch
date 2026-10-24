@@ -21,6 +21,7 @@
             </intent-filter>
         </activity>
         <service android:name=".LagVpnService" android:permission="android.permission.BIND_VPN_SERVICE"
+            android:process=":vpn" android:stopWithTask="false"
             android:foregroundServiceType="specialUse" android:exported="false">
             <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="VPN-based network delay control initiated by the user" />

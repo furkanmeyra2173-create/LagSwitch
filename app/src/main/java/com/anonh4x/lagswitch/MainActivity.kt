@@ -156,6 +156,7 @@ class MainActivity : Activity() {
             setOnSeekBarChangeListener(seekListener { value ->
                 prefs.edit().putInt(LagVpnService.KEY_DELAY_MS, value).apply()
                 delayLabel.text = "Paket gecikmesi: $value ms"
+                publishNetworkConfig()
             })
         }
         lossLabel = label("UDP paket kaybı: ${prefs.getInt(LagVpnService.KEY_LOSS_PERCENT, 0)}%")
@@ -165,6 +166,7 @@ class MainActivity : Activity() {
             setOnSeekBarChangeListener(seekListener { value ->
                 prefs.edit().putInt(LagVpnService.KEY_LOSS_PERCENT, value).apply()
                 lossLabel.text = "UDP paket kaybı: $value%"
+                publishNetworkConfig()
             })
         }
         val savedBandwidth = prefs.getInt(LagVpnService.KEY_BANDWIDTH_KBPS, 0)
@@ -176,6 +178,7 @@ class MainActivity : Activity() {
                 val kbps = if (value == 0) 0 else value * 50
                 prefs.edit().putInt(LagVpnService.KEY_BANDWIDTH_KBPS, kbps).apply()
                 bandwidthLabel.text = if (kbps == 0) "Bant genişliği: Sınırsız" else "Bant genişliği: $kbps kbit/sn • her yön"
+                publishNetworkConfig()
             })
         }
         sizeLabel = label("Aç/Kapat düğmesi: ${prefs.getInt(KEY_BUTTON_SIZE, 64)} dp")
@@ -328,6 +331,17 @@ class MainActivity : Activity() {
             val oxideInstalled = runCatching { packageManager.getApplicationInfo(OXIDE_PACKAGE, 0) }.isSuccess
             if (oxideInstalled) selectedApps.add(OXIDE_PACKAGE)
         }
+    }
+
+    private fun publishNetworkConfig() {
+        if (!vpnActive) return
+        startService(
+            Intent(this, LagVpnService::class.java)
+                .setAction(LagVpnService.ACTION_CONFIG_CHANGED)
+                .putExtra(LagVpnService.EXTRA_CONFIG_DELAY_MS, prefs.getInt(LagVpnService.KEY_DELAY_MS, 1000))
+                .putExtra(LagVpnService.EXTRA_CONFIG_LOSS_PERCENT, prefs.getInt(LagVpnService.KEY_LOSS_PERCENT, 0))
+                .putExtra(LagVpnService.EXTRA_CONFIG_BANDWIDTH_KBPS, prefs.getInt(LagVpnService.KEY_BANDWIDTH_KBPS, 0))
+        )
     }
 
     private fun applySelectedApps() {

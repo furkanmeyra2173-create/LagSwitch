@@ -1,5 +1,12 @@
 # ANONH4X LagSwitch (Android)
 
+## 0.3.2 stability update
+- Runs the VPN engine in a dedicated Android process so a native network-engine failure does not directly terminate the main UI process.
+- Uses sticky foreground-service recovery; an automatic service restart begins with Fake Lag disabled.
+- Caps concurrent relay flows and reuses UDP receive buffers to reduce memory pressure.
+- Pushes live delay/loss/bandwidth slider changes to the VPN service explicitly across processes.
+- Persists uncaught Java VPN-process traces for diagnostics.
+
 Rootless Android VPN app for a controlled network-delay experiment.
 
 ## Implemented path
