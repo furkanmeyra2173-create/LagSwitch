@@ -32,6 +32,8 @@ class MainActivity : Activity() {
     private lateinit var testButton: Button
     private lateinit var testStatus: TextView
     private lateinit var delayLabel: TextView
+    private lateinit var lossLabel: TextView
+    private lateinit var bandwidthLabel: TextView
     private lateinit var sizeLabel: TextView
     private lateinit var onTimeLabel: TextView
     private lateinit var offTimeLabel: TextView
@@ -156,6 +158,26 @@ class MainActivity : Activity() {
                 delayLabel.text = "Paket gecikmesi: $value ms"
             })
         }
+        lossLabel = label("UDP paket kaybı: ${prefs.getInt(LagVpnService.KEY_LOSS_PERCENT, 0)}%")
+        val lossSeek = SeekBar(this).apply {
+            max = 50
+            progress = prefs.getInt(LagVpnService.KEY_LOSS_PERCENT, 0).coerceIn(0, 50)
+            setOnSeekBarChangeListener(seekListener { value ->
+                prefs.edit().putInt(LagVpnService.KEY_LOSS_PERCENT, value).apply()
+                lossLabel.text = "UDP paket kaybı: $value%"
+            })
+        }
+        val savedBandwidth = prefs.getInt(LagVpnService.KEY_BANDWIDTH_KBPS, 0)
+        bandwidthLabel = label(if (savedBandwidth <= 0) "Bant genişliği: Sınırsız" else "Bant genişliği: $savedBandwidth kbit/sn • her yön")
+        val bandwidthSeek = SeekBar(this).apply {
+            max = 200
+            progress = if (savedBandwidth <= 0) 0 else (savedBandwidth / 50).coerceIn(1, 200)
+            setOnSeekBarChangeListener(seekListener { value ->
+                val kbps = if (value == 0) 0 else value * 50
+                prefs.edit().putInt(LagVpnService.KEY_BANDWIDTH_KBPS, kbps).apply()
+                bandwidthLabel.text = if (kbps == 0) "Bant genişliği: Sınırsız" else "Bant genişliği: $kbps kbit/sn • her yön"
+            })
+        }
         sizeLabel = label("Aç/Kapat düğmesi: ${prefs.getInt(KEY_BUTTON_SIZE, 64)} dp")
         val sizeSeek = SeekBar(this).apply {
             max = 56
@@ -201,7 +223,7 @@ class MainActivity : Activity() {
             })
         }
         val info = TextView(this).apply {
-            text = "Gecikme ayarı 0–3000 ms arasındadır. VPN gecikme KAPALI başlar; Oxide tamamen açıldıktan sonra LAG'i aç. Otomatik döngü, VPN açıkken seçtiğin AÇIK/KAPALI sürelerini tekrarlar. Seçtiğin uygulamaların trafiği tünelden geçer; yüksek gecikme oyunun bağlantısını kesebilir."
+            text = "Gecikme 0–3000 ms, UDP paket kaybı %0–50 ve bant genişliği sınırsız veya 50–10000 kbit/sn olarak ayarlanabilir. Kayıp simülasyonu yalnızca UDP datagramlarında uygulanır; TCP akışından veri silinmez. Ayarlar yalnızca LAG AÇIK durumunda etkilidir. Çok yüksek gecikme veya kayıp oyunun bağlantısını kesebilir."
             textSize = 12f
             setTextColor(Color.rgb(150, 161, 178))
             setPadding(0, dp(14), 0, 0)
@@ -217,6 +239,10 @@ class MainActivity : Activity() {
         root.addView(settingsTitle, ViewGroup.LayoutParams(-1, -2))
         root.addView(delayLabel, ViewGroup.LayoutParams(-1, -2))
         root.addView(delaySeek, ViewGroup.LayoutParams(-1, -2))
+        root.addView(lossLabel, ViewGroup.LayoutParams(-1, -2))
+        root.addView(lossSeek, ViewGroup.LayoutParams(-1, -2))
+        root.addView(bandwidthLabel, ViewGroup.LayoutParams(-1, -2))
+        root.addView(bandwidthSeek, ViewGroup.LayoutParams(-1, -2))
         root.addView(sizeLabel, ViewGroup.LayoutParams(-1, -2))
         root.addView(sizeSeek, ViewGroup.LayoutParams(-1, -2))
         root.addView(autoCycle, ViewGroup.LayoutParams(-1, -2))
