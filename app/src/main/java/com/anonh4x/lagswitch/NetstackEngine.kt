@@ -16,6 +16,10 @@ import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlin.random.Random
 import java.io.IOException
 import java.net.DatagramPacket
 import java.net.DatagramSocket
@@ -30,8 +34,12 @@ internal class NetstackEngine(
     private val vpnService: VpnService,
     private val delayEnabled: () -> Boolean,
     private val configuredDelayMs: () -> Long,
+    private val configuredLossPercent: () -> Int,
+    private val configuredBandwidthKbps: () -> Int,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val uploadLimiter = BandwidthLimiter()
+    private val downloadLimiter = BandwidthLimiter()
     private val stopped = AtomicBoolean(false)
     private val closeActions = ConcurrentHashMap.newKeySet<() -> Unit>()
     @Volatile private var tunnel: Tunnel? = null
@@ -102,7 +110,8 @@ internal class NetstackEngine(
                         pipeBytes(
                             read = { buffer -> try { appSide.read(buffer).toInt() } catch (_: Exception) { -1 } },
                             write = { bytes -> output.write(bytes); output.flush() },
-                            delayTraffic = !bypassDelay, abortFlow = ::closeFlow,
+                            delayTraffic = !bypassDelay, limiter = uploadLimiter,
+                            bandwidthKbps = configuredBandwidthKbps, abortFlow = ::closeFlow,
                         )
                     } finally { closeFlow() }
                 }
@@ -111,7 +120,8 @@ internal class NetstackEngine(
                         pipeBytes(
                             read = { buffer -> input.read(buffer) },
                             write = { bytes -> appSide.write(bytes) },
-                            delayTraffic = !bypassDelay, abortFlow = ::closeFlow,
+                            delayTraffic = !bypassDelay, limiter = downloadLimiter,
+                            bandwidthKbps = configuredBandwidthKbps, abortFlow = ::closeFlow,
                         )
                     } finally { closeFlow() }
                 }
@@ -145,7 +155,9 @@ internal class NetstackEngine(
                         pipeDatagrams(
                             read = { appSide.receive() },
                             write = { bytes -> socket.send(DatagramPacket(bytes, bytes.size)) },
-                            delayTraffic = !bypassDelay, abortFlow = ::closeFlow,
+                            delayTraffic = !bypassDelay, limiter = uploadLimiter,
+                            lossPercent = configuredLossPercent, bandwidthKbps = configuredBandwidthKbps,
+                            abortFlow = ::closeFlow,
                         )
                     } finally { closeFlow() }
                 }
@@ -159,7 +171,9 @@ internal class NetstackEngine(
                                 buffer.copyOf(packet.length)
                             },
                             write = { bytes -> appSide.send(bytes) },
-                            delayTraffic = !bypassDelay, abortFlow = ::closeFlow,
+                            delayTraffic = !bypassDelay, limiter = downloadLimiter,
+                            lossPercent = configuredLossPercent, bandwidthKbps = configuredBandwidthKbps,
+                            abortFlow = ::closeFlow,
                         )
                     } finally { closeFlow() }
                 }
@@ -175,7 +189,8 @@ internal class NetstackEngine(
 
     private suspend fun pipeBytes(
         read: (ByteArray) -> Int, write: (ByteArray) -> Unit,
-        delayTraffic: Boolean, abortFlow: () -> Unit,
+        delayTraffic: Boolean, limiter: BandwidthLimiter,
+        bandwidthKbps: () -> Int, abortFlow: () -> Unit,
     ) = coroutineScope {
         val queue = DelayQueue<ByteArray>(TCP_QUEUE_ITEMS, { if (delayTraffic && delayEnabled()) configuredDelayMs().coerceIn(0L, 3000L) else 0L })
         val producer = launch(Dispatchers.IO) {
@@ -192,6 +207,7 @@ internal class NetstackEngine(
         try {
             while (true) {
                 val bytes = queue.take() ?: break
+                if (delayTraffic && delayEnabled()) limiter.pace(bytes.size, bandwidthKbps())
                 write(bytes)
             }
             drainedNormally = true
@@ -204,13 +220,18 @@ internal class NetstackEngine(
 
     private suspend fun pipeDatagrams(
         read: () -> ByteArray?, write: (ByteArray) -> Unit,
-        delayTraffic: Boolean, abortFlow: () -> Unit,
+        delayTraffic: Boolean, limiter: BandwidthLimiter,
+        lossPercent: () -> Int, bandwidthKbps: () -> Int,
+        abortFlow: () -> Unit,
     ) = coroutineScope {
         val queue = DelayQueue<ByteArray>(UDP_QUEUE_ITEMS, { if (delayTraffic && delayEnabled()) configuredDelayMs().coerceIn(0L, 3000L) else 0L })
         val producer = launch(Dispatchers.IO) {
             try {
                 while (isActive) {
                     val packet = read() ?: break
+                    // UDP datagrams can be discarded safely; never remove bytes from a TCP stream.
+                    val loss = if (delayTraffic && delayEnabled()) lossPercent().coerceIn(0, 50) else 0
+                    if (loss > 0 && Random.nextInt(100) < loss) continue
                     queue.offer(packet.copyOf())
                 }
             } finally { queue.close() }
@@ -219,6 +240,7 @@ internal class NetstackEngine(
         try {
             while (true) {
                 val packet = queue.take() ?: break
+                if (delayTraffic && delayEnabled()) limiter.pace(packet.size, bandwidthKbps())
                 write(packet)
             }
             drainedNormally = true
@@ -227,6 +249,30 @@ internal class NetstackEngine(
             if (!producer.isCompleted) { producer.cancel(); queue.cancel() }
         }
         producer.join()
+    }
+
+    /** Rate limiter shared by all flows in one direction for an aggregate bandwidth cap. */
+    private class BandwidthLimiter {
+        private val mutex = Mutex()
+        private var nextAvailableNanos = 0L
+
+        suspend fun pace(byteCount: Int, kbps: Int) {
+            if (byteCount <= 0) return
+            if (kbps <= 0) {
+                mutex.withLock { nextAvailableNanos = 0L }
+                return
+            }
+            val waitNanos = mutex.withLock {
+                val now = System.nanoTime()
+                val sendAt = maxOf(now, nextAvailableNanos)
+                // kbps is kilobits/second; reserve serialization time for each outgoing chunk.
+                val transmitNanos = (byteCount.toDouble() * 8_000_000.0 / kbps.toDouble())
+                    .toLong().coerceAtLeast(1L)
+                nextAvailableNanos = sendAt + transmitNanos
+                (sendAt - now).coerceAtLeast(0L)
+            }
+            if (waitNanos > 0L) delay((waitNanos + 999_999L) / 1_000_000L)
+        }
     }
 
     companion object {
